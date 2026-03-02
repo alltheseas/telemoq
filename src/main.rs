@@ -1,3 +1,13 @@
+//! telemoq — MoQ transport for robotics teleoperation.
+//!
+//! "Build highly optimized, low-latency, reliable data streaming systems
+//!  over unreliable transports in real-world conditions."
+//!
+//! On-robot: ROS2/DDS handles 1kHz inter-process comms. LCM for lightweight messaging.
+//! WAN link: MoQ/QUIC with per-stream priority. This is the gap telemoq fills.
+//! Alternative to WebRTC (Polymath, Transitive, Viam) and DDS+SRT (IHMC) for the
+//! operator↔robot link over WiFi and cellular.
+
 use anyhow::Context;
 use clap::Parser;
 use url::Url;
@@ -31,6 +41,11 @@ pub struct Config {
     /// Enable CSV logging to stdout (subscriber only)
     #[arg(long)]
     pub csv: bool,
+
+    /// Disable per-stream priority (all tracks get equal priority 0).
+    /// Benchmark mode: simulates a transport without priority scheduling.
+    #[arg(long)]
+    pub no_priority: bool,
 }
 
 #[derive(Parser, Clone)]
@@ -47,11 +62,13 @@ async fn main() -> anyhow::Result<()> {
     let client = config.client.init()?;
 
     match config.role {
-        Role::Publish => publish::run(client, &config.url, &config.broadcast)
+        Role::Publish => publish::run(client, &config.url, &config.broadcast, config.no_priority)
             .await
             .context("publisher error"),
-        Role::Subscribe => subscribe::run(client, &config.url, &config.broadcast, config.csv)
-            .await
-            .context("subscriber error"),
+        Role::Subscribe => {
+            subscribe::run(client, &config.url, &config.broadcast, config.csv, config.no_priority)
+                .await
+                .context("subscriber error")
+        }
     }
 }

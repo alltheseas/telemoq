@@ -10,8 +10,10 @@ use crate::schema::TRACKS;
 struct TrackStats {
     recv_count: AtomicU64,
     recv_bytes: AtomicU64,
-    _latency_sum_ms: AtomicU64,
-    _latency_count: AtomicU64,
+    latency_sum_ms: AtomicU64,
+    latency_count: AtomicU64,
+    /// Max inter-arrival gap in ms (reset each display tick)
+    max_gap_ms: AtomicU64,
     last_payload: std::sync::Mutex<Option<bytes::Bytes>>,
 }
 
@@ -20,8 +22,9 @@ impl TrackStats {
         Self {
             recv_count: AtomicU64::new(0),
             recv_bytes: AtomicU64::new(0),
-            _latency_sum_ms: AtomicU64::new(0),
-            _latency_count: AtomicU64::new(0),
+            latency_sum_ms: AtomicU64::new(0),
+            latency_count: AtomicU64::new(0),
+            max_gap_ms: AtomicU64::new(0),
             last_payload: std::sync::Mutex::new(None),
         }
     }
@@ -32,6 +35,7 @@ pub async fn run(
     url: &Url,
     broadcast_name: &str,
     csv: bool,
+    no_priority: bool,
 ) -> anyhow::Result<()> {
     tracing::info!(broadcast = %broadcast_name, url = %url, "subscribing to telemetry");
 
@@ -61,7 +65,7 @@ pub async fn run(
     let display_broadcast = broadcast_name.to_string();
     let display_url = url.to_string();
     let display_handle = tokio::spawn(async move {
-        display_loop(&display_stats, &display_broadcast, &display_url, start, csv).await;
+        display_loop(&display_stats, &display_broadcast, &display_url, start, csv, no_priority).await;
     });
 
     // Main event loop: wait for broadcasts, subscribe to tracks
@@ -102,6 +106,12 @@ pub async fn run(
     }
 }
 
+/// Tracks that use raw byte blobs with LE u64 timestamp in first 8 bytes
+/// (not bincode-serialized structs)
+fn is_raw_blob_track(name: &str) -> bool {
+    matches!(name, "video/camera0" | "perception/pointcloud")
+}
+
 async fn read_track(
     mut consumer: TrackConsumer,
     stats: Arc<TrackStats>,
@@ -114,31 +124,42 @@ async fn read_track(
             .as_millis() as u64
     };
 
+    let mut last_recv_time: Option<u64> = None;
+
     while let Some(mut group) = consumer.next_group().await? {
         while let Some(frame) = group.read_frame().await? {
+            let recv_time = now_ms();
             stats.recv_count.fetch_add(1, Ordering::Relaxed);
             stats.recv_bytes.fetch_add(frame.len() as u64, Ordering::Relaxed);
 
-            // Try to extract timestamp from bincode-serialized payload
-            // All our structs start with timestamp_ms: u64
+            // Track inter-arrival gap
+            if let Some(prev) = last_recv_time {
+                let gap = recv_time.saturating_sub(prev);
+                // Atomic max: keep retrying until we succeed or see a larger value
+                let mut current = stats.max_gap_ms.load(Ordering::Relaxed);
+                while gap > current {
+                    match stats.max_gap_ms.compare_exchange_weak(
+                        current, gap, Ordering::Relaxed, Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(v) => current = v,
+                    }
+                }
+            }
+            last_recv_time = Some(recv_time);
+
+            // Extract wall-clock timestamp and compute latency
             if frame.len() >= 8 {
-                let ts = if track_name == "video/camera0" {
-                    // Video: timestamp is raw LE u64 in first 8 bytes
+                let ts = if is_raw_blob_track(track_name) {
                     u64::from_le_bytes(frame[..8].try_into().unwrap())
                 } else {
-                    // Bincode: first 8 bytes are the u64 timestamp
                     bincode::deserialize::<u64>(&frame[..8]).unwrap_or(0)
                 };
 
-                if ts > 0 {
-                    // ts is elapsed_ms from publisher start, not wall clock
-                    // For latency, we use current wall time - publisher wall time
-                    // Since both are on localhost, we just note the timestamp
-                    let current = now_ms();
-                    if current > ts {
-                        // This won't be useful for elapsed-based timestamps
-                        // but works for wall-clock timestamps
-                    }
+                if ts > 0 && recv_time > ts {
+                    let latency = recv_time - ts;
+                    stats.latency_sum_ms.fetch_add(latency, Ordering::Relaxed);
+                    stats.latency_count.fetch_add(1, Ordering::Relaxed);
                 }
             }
 
@@ -155,9 +176,11 @@ async fn display_loop(
     url: &str,
     start: tokio::time::Instant,
     csv: bool,
+    no_priority: bool,
 ) {
+    let mode = if no_priority { "no-priority" } else { "priority" };
     if csv {
-        println!("elapsed_s,track,priority,recv_per_s,expected_per_s,pct,bytes_per_s");
+        println!("elapsed_s,track,priority,recv_per_s,expected_per_s,pct,bytes_per_s,avg_latency_ms,max_gap_ms,mode");
     }
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -171,13 +194,17 @@ async fn display_loop(
             for (i, def) in TRACKS.iter().enumerate() {
                 let count = stats[i].recv_count.swap(0, Ordering::Relaxed);
                 let bytes = stats[i].recv_bytes.swap(0, Ordering::Relaxed);
+                let lat_sum = stats[i].latency_sum_ms.swap(0, Ordering::Relaxed);
+                let lat_count = stats[i].latency_count.swap(0, Ordering::Relaxed);
+                let gap = stats[i].max_gap_ms.swap(0, Ordering::Relaxed);
                 let pct = if def.rate_hz > 0 {
                     count * 100 / def.rate_hz as u64
                 } else {
                     0
                 };
+                let avg_lat = if lat_count > 0 { lat_sum / lat_count } else { 0 };
                 println!(
-                    "{elapsed},{},{},{count},{},{pct},{bytes}",
+                    "{elapsed},{},{},{count},{},{pct},{bytes},{avg_lat},{gap},{mode}",
                     def.name, def.priority, def.rate_hz
                 );
             }
@@ -186,17 +213,25 @@ async fn display_loop(
 
         // ANSI terminal display
         print!("\x1B[H\x1B[J"); // cursor home + clear
+        let mode_display = if no_priority {
+            "\x1B[33m NO-PRIORITY \x1B[0m"
+        } else {
+            "\x1B[32m PRIORITY \x1B[0m"
+        };
         println!(
-            "  telemoq | {} | relay: {} | uptime: {}s",
-            broadcast_name, url, elapsed
+            "  telemoq | {} | relay: {} | uptime: {}s | mode: {}",
+            broadcast_name, url, elapsed, mode_display
         );
-        println!("  ╔══════════════════════╤═════╤═════════╤══════════╤════════════╤═══════════════════════╗");
-        println!("  ║ Track                │ Pri │ Recv/s  │ Expected │   Status   │ Throughput            ║");
-        println!("  ╟──────────────────────┼─────┼─────────┼──────────┼────────────┼───────────────────────╢");
+        println!("  ╔══════════════════════╤═════╤═════════╤══════════╤════════════╤═════════╤═══════╤═══════════════════════╗");
+        println!("  ║ Track                │ Pri │ Recv/s  │ Expected │   Status   │ Latency │  Gap  │ Throughput            ║");
+        println!("  ╟──────────────────────┼─────┼─────────┼──────────┼────────────┼─────────┼───────┼───────────────────────╢");
 
         for (i, def) in TRACKS.iter().enumerate() {
             let count = stats[i].recv_count.swap(0, Ordering::Relaxed);
             let bytes = stats[i].recv_bytes.swap(0, Ordering::Relaxed);
+            let lat_sum = stats[i].latency_sum_ms.swap(0, Ordering::Relaxed);
+            let lat_count = stats[i].latency_count.swap(0, Ordering::Relaxed);
+            let gap = stats[i].max_gap_ms.swap(0, Ordering::Relaxed);
             let expected = def.rate_hz as u64;
             let pct = if expected > 0 {
                 (count * 100).checked_div(expected).unwrap_or(0)
@@ -206,6 +241,25 @@ async fn display_loop(
 
             let status = if pct >= 80 { "\x1B[32m  OK  \x1B[0m" } else { "\x1B[31mDEGRAD\x1B[0m" };
 
+            let avg_lat = if lat_count > 0 { lat_sum / lat_count } else { 0 };
+            let lat_str = format!("{:>4}ms", avg_lat);
+            // Color latency: green <10ms, yellow 10-50ms, red >50ms
+            let lat_colored = if avg_lat < 10 {
+                format!("\x1B[32m{lat_str}\x1B[0m")
+            } else if avg_lat < 50 {
+                format!("\x1B[33m{lat_str}\x1B[0m")
+            } else {
+                format!("\x1B[31m{lat_str}\x1B[0m")
+            };
+
+            // Color gap: green if within 12ms extrapolation window, red if exceeding
+            let gap_str = format!("{:>3}ms", gap);
+            let gap_colored = if gap <= 12 {
+                format!("\x1B[32m{gap_str}\x1B[0m")
+            } else {
+                format!("\x1B[31m{gap_str}\x1B[0m")
+            };
+
             // Bar chart (20 chars wide)
             let bar_len = std::cmp::min((pct as usize) / 5, 20);
             let bar: String = "█".repeat(bar_len) + &"░".repeat(20 - bar_len);
@@ -213,18 +267,42 @@ async fn display_loop(
             let throughput = format_bytes(bytes);
 
             println!(
-                "  ║ {:<20} │ P{:<2} │ {:>5}/s │ {:>6}/s │   {}   │ {} {:>9} ║",
-                def.label, def.priority, count, expected, status, bar, throughput
+                "  ║ {:<20} │ P{:<2} │ {:>5}/s │ {:>6}/s │   {}   │ {} │ {} │ {} {:>9} ║",
+                def.label, def.priority, count, expected, status, lat_colored, gap_colored, bar, throughput
             );
 
             // Show latest data for interesting tracks
             if let Some(payload) = stats[i].last_payload.lock().unwrap().as_ref() {
+                if def.name == "safety/heartbeat" && payload.len() >= 17 {
+                    if let Ok(hb) = bincode::deserialize::<crate::schema::Heartbeat>(payload) {
+                        let estop = if hb.estop_engaged { "\x1B[31mENGAGED\x1B[0m" } else { "ok" };
+                        println!(
+                            "  ║   └─ seq: {} estop: {} {:>65} ║",
+                            hb.sequence, estop, ""
+                        );
+                    }
+                }
+                if def.name == "control/task_status" && payload.len() >= 14 {
+                    if let Ok(ts) = bincode::deserialize::<crate::schema::TaskStatus>(payload) {
+                        let state_str = match ts.state {
+                            0 => "idle",
+                            1 => "executing",
+                            2 => "complete",
+                            3 => "failed",
+                            _ => "?",
+                        };
+                        println!(
+                            "  ║   └─ task #{}: {} ({}%) {:>58} ║",
+                            ts.task_id, state_str, ts.progress_pct, ""
+                        );
+                    }
+                }
                 if def.name == "sensors/joints" && payload.len() > 8 {
                     if let Ok(js) = bincode::deserialize::<crate::schema::JointState>(payload) {
                         let angles: Vec<String> =
                             js.positions.iter().map(|p| format!("{:.2}", p)).collect();
                         println!(
-                            "  ║   └─ joints: [{}] rad {:>14} ║",
+                            "  ║   └─ joints: [{}] rad {:>30} ║",
                             angles.join(", "),
                             ""
                         );
@@ -234,7 +312,7 @@ async fn display_loop(
                     if let Ok(ft) = bincode::deserialize::<crate::schema::ForceTorque>(payload) {
                         let contact = if ft.force[2].abs() > 3.0 { "YES" } else { "no" };
                         println!(
-                            "  ║   └─ F=[{:.1}, {:.1}, {:.1}]N  weld contact: {} {:>23} ║",
+                            "  ║   └─ F=[{:.1}, {:.1}, {:.1}]N  weld contact: {} {:>39} ║",
                             ft.force[0], ft.force[1], ft.force[2], contact, ""
                         );
                     }
@@ -242,12 +320,13 @@ async fn display_loop(
             }
         }
 
-        println!("  ╟──────────────────────┴─────┴─────────┴──────────┴────────────┴───────────────────────╢");
-        println!("  ║                                                                                      ║");
-        println!("  ║  TCP/WebRTC: One lost video packet  →  ALL streams freeze (HOL blocking)             ║");
-        println!("  ║  MoQ/QUIC:   Video degrades         →  Robot stays under control (priority streams)  ║");
-        println!("  ║                                                                                      ║");
-        println!("  ╚══════════════════════════════════════════════════════════════════════════════════════╝");
+        println!("  ╟──────────────────────┴─────┴─────────┴──────────┴────────────┴─────────┴───────┴───────────────────────╢");
+        println!("  ║  Latency = wall-clock delta (pub→relay→sub).  Gap = max inter-arrival time (12ms = IHMC KST window).  ║");
+        println!("  ║                                                                                                        ║");
+        println!("  ║  IHMC DRC lesson: 9,600 bps was enough for control. Video is expendable.                               ║");
+        println!("  ║  TCP/WebRTC: One lost video packet  →  ALL streams freeze (HOL blocking)                               ║");
+        println!("  ║  MoQ/QUIC:   Video degrades         →  Robot stays under control (priority streams)                    ║");
+        println!("  ╚════════════════════════════════════════════════════════════════════════════════════════════════════════╝");
     }
 }
 
