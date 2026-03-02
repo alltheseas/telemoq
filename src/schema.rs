@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+/// Wall-clock timestamp in milliseconds since UNIX epoch.
+/// Used by both publisher and subscriber to compute end-to-end latency.
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before UNIX epoch")
+        .as_millis() as u64
+}
+
 // telemoq: MoQ transport for the WAN teleop link.
 //
 // Protocol context:
@@ -122,6 +131,7 @@ const JOINT_LIMITS: [(f64, f64); 7] = [
     (-2.8973, 2.8973),
 ];
 
+/// Generate a watchdog heartbeat with the given timestamp and sequence number.
 pub fn generate_heartbeat(elapsed_ms: u64, sequence: u64) -> Heartbeat {
     Heartbeat {
         timestamp_ms: elapsed_ms,
@@ -130,6 +140,7 @@ pub fn generate_heartbeat(elapsed_ms: u64, sequence: u64) -> Heartbeat {
     }
 }
 
+/// Generate an SE3 streaming command with sinusoidal hand/chest motion.
 pub fn generate_streaming_command(elapsed_ms: u64) -> StreamingCommand {
     let t = elapsed_ms as f64 / 1000.0;
     StreamingCommand {
@@ -166,6 +177,7 @@ pub fn generate_streaming_command(elapsed_ms: u64) -> StreamingCommand {
     }
 }
 
+/// Generate a task status cycling through idle → executing → complete every 10s.
 pub fn generate_task_status(elapsed_ms: u64) -> TaskStatus {
     // Simulate repeating 10-second task cycle: idle → executing → complete
     let cycle_ms: u64 = 10_000;
@@ -185,6 +197,7 @@ pub fn generate_task_status(elapsed_ms: u64) -> TaskStatus {
     }
 }
 
+/// Generate 7-DOF joint state with sinusoidal motion within Franka Panda limits.
 pub fn generate_joint_state(elapsed_ms: u64) -> JointState {
     let t = elapsed_ms as f64 / 1000.0;
     let mut positions = [0.0f64; 7];
@@ -201,6 +214,7 @@ pub fn generate_joint_state(elapsed_ms: u64) -> JointState {
     JointState { timestamp_ms: elapsed_ms, positions, velocities }
 }
 
+/// Generate IMU reading with gravity-dominated accel and small gyro perturbations.
 pub fn generate_imu(elapsed_ms: u64) -> ImuReading {
     let t = elapsed_ms as f64 / 1000.0;
     ImuReading {
@@ -223,6 +237,7 @@ pub fn generate_imu(elapsed_ms: u64) -> ImuReading {
     }
 }
 
+/// Generate force/torque sensor reading simulating weld contact forces.
 pub fn generate_force_torque(elapsed_ms: u64) -> ForceTorque {
     let t = elapsed_ms as f64 / 1000.0;
     ForceTorque {
@@ -237,5 +252,134 @@ pub fn generate_force_torque(elapsed_ms: u64) -> ForceTorque {
             0.3 * (0.4 * t).cos(),
             1.0 + 0.5 * (0.6 * t).sin(),
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heartbeat_preserves_fields() {
+        let hb = generate_heartbeat(12345, 42);
+        assert_eq!(hb.timestamp_ms, 12345);
+        assert_eq!(hb.sequence, 42);
+        assert!(!hb.estop_engaged);
+    }
+
+    #[test]
+    fn heartbeat_serializes_to_expected_size() {
+        let hb = generate_heartbeat(0, 0);
+        let bytes = bincode::serialize(&hb).expect("serialize heartbeat");
+        // u64 + u64 + bool = 17 bytes (bincode)
+        assert_eq!(bytes.len(), 17);
+    }
+
+    #[test]
+    fn streaming_command_quaternions_are_unit() {
+        for ms in [0, 1000, 5000, 10_000] {
+            let cmd = generate_streaming_command(ms);
+            let norm = |q: &[f64; 4]| (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+            assert!((norm(&cmd.left_hand_quat) - 1.0).abs() < 1e-10, "left hand quat not unit at t={ms}");
+            assert!((norm(&cmd.right_hand_quat) - 1.0).abs() < 1e-10, "right hand quat not unit at t={ms}");
+            assert!((norm(&cmd.chest_quat) - 1.0).abs() < 1e-10, "chest quat not unit at t={ms}");
+        }
+    }
+
+    #[test]
+    fn streaming_command_has_all_parts() {
+        let cmd = generate_streaming_command(0);
+        assert!(cmd.has_left_hand);
+        assert!(cmd.has_right_hand);
+        assert!(cmd.has_chest);
+        assert_eq!(cmd.stream_integration_duration_ms, 12);
+    }
+
+    #[test]
+    fn task_status_cycles_through_states() {
+        let idle = generate_task_status(500);       // 5% of 10s cycle
+        assert_eq!(idle.state, 0);
+        assert_eq!(idle.progress_pct, 0);
+
+        let mid = generate_task_status(5000);       // 50% of cycle
+        assert_eq!(mid.state, 1);
+        assert!(mid.progress_pct > 0 && mid.progress_pct < 100);
+
+        let done = generate_task_status(9500);      // 95% of cycle
+        assert_eq!(done.state, 2);
+        assert_eq!(done.progress_pct, 100);
+    }
+
+    #[test]
+    fn joint_state_within_limits() {
+        for ms in [0, 1000, 5000, 10_000, 60_000] {
+            let js = generate_joint_state(ms);
+            assert_eq!(js.timestamp_ms, ms);
+            for (i, &pos) in js.positions.iter().enumerate() {
+                let (lo, hi) = JOINT_LIMITS[i];
+                assert!(pos >= lo && pos <= hi, "joint {i} out of range at t={ms}: {pos}");
+            }
+        }
+    }
+
+    #[test]
+    fn imu_has_gravity() {
+        let imu = generate_imu(0);
+        // Z accel should be near -9.81 (gravity)
+        assert!((imu.accel[2] + 9.81).abs() < 0.5, "z accel should be near -9.81");
+    }
+
+    #[test]
+    fn force_torque_has_reasonable_magnitudes() {
+        let ft = generate_force_torque(0);
+        // X force centered around 10N (weld contact)
+        assert!(ft.force[0] > 0.0, "x force should be positive");
+        // Torque magnitudes should be < 5 Nm
+        for &t in &ft.torque {
+            assert!(t.abs() < 5.0, "torque magnitude unreasonable: {t}");
+        }
+    }
+
+    #[test]
+    fn all_generators_bincode_roundtrip() {
+        let hb = generate_heartbeat(1000, 1);
+        let hb2: Heartbeat = bincode::deserialize(&bincode::serialize(&hb).unwrap()).unwrap();
+        assert_eq!(hb.sequence, hb2.sequence);
+
+        let cmd = generate_streaming_command(1000);
+        let cmd2: StreamingCommand = bincode::deserialize(&bincode::serialize(&cmd).unwrap()).unwrap();
+        assert_eq!(cmd.timestamp_ms, cmd2.timestamp_ms);
+
+        let ts = generate_task_status(1000);
+        let ts2: TaskStatus = bincode::deserialize(&bincode::serialize(&ts).unwrap()).unwrap();
+        assert_eq!(ts.task_id, ts2.task_id);
+
+        let js = generate_joint_state(1000);
+        let js2: JointState = bincode::deserialize(&bincode::serialize(&js).unwrap()).unwrap();
+        assert_eq!(js.positions, js2.positions);
+
+        let imu = generate_imu(1000);
+        let imu2: ImuReading = bincode::deserialize(&bincode::serialize(&imu).unwrap()).unwrap();
+        assert_eq!(imu.accel, imu2.accel);
+
+        let ft = generate_force_torque(1000);
+        let ft2: ForceTorque = bincode::deserialize(&bincode::serialize(&ft).unwrap()).unwrap();
+        assert_eq!(ft.force, ft2.force);
+    }
+
+    #[test]
+    fn track_definitions_are_sorted_by_priority() {
+        for window in TRACKS.windows(2) {
+            assert!(
+                window[0].priority <= window[1].priority,
+                "TRACKS not sorted by priority: {} (P{}) > {} (P{})",
+                window[0].name, window[0].priority, window[1].name, window[1].priority,
+            );
+        }
+    }
+
+    #[test]
+    fn track_count_matches_expected() {
+        assert_eq!(TRACKS.len(), 8, "expected 8 tracks (IHMC KST hierarchy)");
     }
 }

@@ -2,17 +2,31 @@ use anyhow::Context;
 use moq_lite::*;
 use url::Url;
 
-use crate::schema::{self, TRACKS};
+use crate::schema::{self, now_ms, TRACKS};
 
-/// Wall-clock timestamp in milliseconds since UNIX epoch.
-/// Used instead of elapsed time so subscribers can compute real latency.
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
+/// Write a frame to the correct destination.
+/// In single-stream mode, prefixes each frame with a 1-byte track index for demuxing.
+fn emit_frame(
+    mux_track: &mut Option<TrackProducer>,
+    track_producers: &mut [TrackProducer],
+    idx: usize,
+    payload: Vec<u8>,
+) {
+    if let Some(ref mut mux) = mux_track {
+        let mut buf = Vec::with_capacity(1 + payload.len());
+        buf.push(idx as u8);
+        buf.extend_from_slice(&payload);
+        mux.write_frame(bytes::Bytes::from(buf));
+    } else {
+        track_producers[idx].write_frame(bytes::Bytes::from(payload));
+    }
 }
 
+/// Publish all 8 telemetry tracks at their configured rates.
+///
+/// Connects to a MoQ relay, creates one QUIC stream per track (or a single
+/// multiplexed stream in `--single-stream` mode), and loops forever generating
+/// synthetic telemetry at IHMC KST-aligned rates.
 pub async fn run(client: moq_native::Client, url: &Url, broadcast_name: &str, no_priority: bool, single_stream: bool) -> anyhow::Result<()> {
     if single_stream {
         tracing::warn!("--single-stream: all tracks multiplexed into one QUIC stream (WebRTC-style HOL blocking)");
@@ -80,21 +94,6 @@ pub async fn run(client: moq_native::Client, url: &Url, broadcast_name: &str, no
     let mode = if single_stream { "single-stream" } else if no_priority { "no-priority" } else { "priority" };
     tracing::info!("publishing started — all 8 tracks active (IHMC KST-aligned), mode={mode}");
 
-    // Helper: write a frame to the correct destination.
-    // In single-stream mode, prefix each frame with a 1-byte track index for demuxing.
-    macro_rules! emit {
-        ($idx:expr, $payload:expr) => {
-            if let Some(ref mut mux) = mux_track {
-                let mut buf = Vec::with_capacity(1 + $payload.len());
-                buf.push($idx as u8);
-                buf.extend_from_slice(&$payload);
-                mux.write_frame(bytes::Bytes::from(buf));
-            } else {
-                track_producers[$idx].write_frame(bytes::Bytes::from($payload));
-            }
-        };
-    }
-
     tokio::select! {
         res = session.closed() => res.context("session closed"),
         _ = async {
@@ -104,50 +103,50 @@ pub async fn run(client: moq_native::Client, url: &Url, broadcast_name: &str, no
                         let ts = now_ms();
                         heartbeat_seq += 1;
                         let data = schema::generate_heartbeat(ts, heartbeat_seq);
-                        let payload = bincode::serialize(&data).unwrap();
-                        emit!(0, payload);
+                        let payload = bincode::serialize(&data).expect("fixed-size Heartbeat");
+                        emit_frame(&mut mux_track, &mut track_producers, 0, payload);
                     }
                     _ = streaming_interval.tick() => {
                         let ts = now_ms();
                         let data = schema::generate_streaming_command(ts);
-                        let payload = bincode::serialize(&data).unwrap();
-                        emit!(1, payload);
+                        let payload = bincode::serialize(&data).expect("fixed-size StreamingCommand");
+                        emit_frame(&mut mux_track, &mut track_producers, 1, payload);
                     }
                     _ = task_status_interval.tick() => {
                         let ts = now_ms();
                         let data = schema::generate_task_status(ts);
-                        let payload = bincode::serialize(&data).unwrap();
-                        emit!(2, payload);
+                        let payload = bincode::serialize(&data).expect("fixed-size TaskStatus");
+                        emit_frame(&mut mux_track, &mut track_producers, 2, payload);
                     }
                     _ = joints_interval.tick() => {
                         let ts = now_ms();
                         let data = schema::generate_joint_state(ts);
-                        let payload = bincode::serialize(&data).unwrap();
-                        emit!(3, payload);
+                        let payload = bincode::serialize(&data).expect("fixed-size JointState");
+                        emit_frame(&mut mux_track, &mut track_producers, 3, payload);
                     }
                     _ = ft_interval.tick() => {
                         let ts = now_ms();
                         let data = schema::generate_force_torque(ts);
-                        let payload = bincode::serialize(&data).unwrap();
-                        emit!(4, payload);
+                        let payload = bincode::serialize(&data).expect("fixed-size ForceTorque");
+                        emit_frame(&mut mux_track, &mut track_producers, 4, payload);
                     }
                     _ = imu_interval.tick() => {
                         let ts = now_ms();
                         let data = schema::generate_imu(ts);
-                        let payload = bincode::serialize(&data).unwrap();
-                        emit!(5, payload);
+                        let payload = bincode::serialize(&data).expect("fixed-size ImuReading");
+                        emit_frame(&mut mux_track, &mut track_producers, 5, payload);
                     }
                     _ = pointcloud_interval.tick() => {
                         let ts = now_ms();
                         let mut cloud = vec![0u8; 50_000];
                         cloud[..8].copy_from_slice(&ts.to_le_bytes());
-                        emit!(6, cloud);
+                        emit_frame(&mut mux_track, &mut track_producers, 6, cloud);
                     }
                     _ = video_interval.tick() => {
                         let ts = now_ms();
                         let mut frame = vec![0u8; 50_000];
                         frame[..8].copy_from_slice(&ts.to_le_bytes());
-                        emit!(7, frame);
+                        emit_frame(&mut mux_track, &mut track_producers, 7, frame);
                     }
                 }
             }

@@ -5,7 +5,7 @@ use anyhow::Context;
 use moq_lite::*;
 use url::Url;
 
-use crate::schema::TRACKS;
+use crate::schema::{self, TRACKS};
 
 struct TrackStats {
     recv_count: AtomicU64,
@@ -30,6 +30,11 @@ impl TrackStats {
     }
 }
 
+/// Subscribe to all telemetry tracks and display live stats.
+///
+/// Connects to a MoQ relay, waits for a broadcast to appear, then subscribes
+/// to each track (or a single multiplexed track in `--single-stream` mode).
+/// Prints a live terminal dashboard or CSV output every second.
 pub async fn run(
     client: moq_native::Client,
     url: &Url,
@@ -133,18 +138,11 @@ async fn read_track(
     stats: Arc<TrackStats>,
     track_name: &str,
 ) -> anyhow::Result<()> {
-    let now_ms = || {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
-    };
-
     let mut last_recv_time: Option<u64> = None;
 
     while let Some(mut group) = consumer.next_group().await? {
         while let Some(frame) = group.read_frame().await? {
-            let recv_time = now_ms();
+            let recv_time = schema::now_ms();
             stats.recv_count.fetch_add(1, Ordering::Relaxed);
             stats.recv_bytes.fetch_add(frame.len() as u64, Ordering::Relaxed);
 
@@ -191,14 +189,7 @@ async fn read_muxed_track(
     mut consumer: TrackConsumer,
     stats: &[Arc<TrackStats>],
 ) -> anyhow::Result<()> {
-    let now_ms = || {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
-    };
-
-    let mut last_recv_times: [Option<u64>; 8] = [None; 8];
+    let mut last_recv_times: Vec<Option<u64>> = vec![None; TRACKS.len()];
 
     while let Some(mut group) = consumer.next_group().await? {
         while let Some(frame) = group.read_frame().await? {
@@ -212,7 +203,7 @@ async fn read_muxed_track(
             }
 
             let payload = frame.slice(1..); // strip the 1-byte prefix
-            let recv_time = now_ms();
+            let recv_time = schema::now_ms();
             let stat = &stats[track_idx];
 
             stat.recv_count.fetch_add(1, Ordering::Relaxed);
@@ -284,6 +275,7 @@ async fn display_loop(
                 let lat_sum = stats[i].latency_sum_ms.swap(0, Ordering::Relaxed);
                 let lat_count = stats[i].latency_count.swap(0, Ordering::Relaxed);
                 let gap = stats[i].max_gap_ms.swap(0, Ordering::Relaxed);
+                let effective_pri = if no_priority { 0 } else { def.priority };
                 let pct = if def.rate_hz > 0 {
                     count * 100 / def.rate_hz as u64
                 } else {
@@ -292,7 +284,7 @@ async fn display_loop(
                 let avg_lat = if lat_count > 0 { lat_sum / lat_count } else { 0 };
                 println!(
                     "{elapsed},{},{},{count},{},{pct},{bytes},{avg_lat},{gap},{mode}",
-                    def.name, def.priority, def.rate_hz
+                    def.name, effective_pri, def.rate_hz
                 );
             }
             continue;
@@ -355,9 +347,10 @@ async fn display_loop(
 
             let throughput = format_bytes(bytes);
 
+            let effective_pri = if no_priority { 0 } else { def.priority };
             println!(
                 "  ║ {:<20} │ P{:<2} │ {:>5}/s │ {:>6}/s │   {}   │ {} │ {} │ {} {:>9} ║",
-                def.label, def.priority, count, expected, status, lat_colored, gap_colored, bar, throughput
+                def.label, effective_pri, count, expected, status, lat_colored, gap_colored, bar, throughput
             );
 
             // Show latest data for interesting tracks
