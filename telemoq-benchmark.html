@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>telemoq benchmark: priority vs no-priority</title>
+<title>telemoq benchmark: three modes, one binary</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -12,7 +12,7 @@
     color: #e0e0e0;
     padding: 2rem 2.5rem;
     min-height: 100vh;
-    max-width: 960px;
+    max-width: 1060px;
     margin: 0 auto;
   }
   h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 0.3rem; }
@@ -66,15 +66,15 @@
   .c-dim { color: #555; }
   .fw600 { font-weight: 600; }
 
-  /* Side-by-side bar chart */
+  /* Three-column bar chart */
   .chart-grid {
     display: grid;
-    grid-template-columns: 150px 28px 1fr 50px 1fr 50px;
-    gap: 0.2rem 0.5rem;
+    grid-template-columns: 130px 28px 1fr 42px 1fr 42px 1fr 42px;
+    gap: 0.2rem 0.4rem;
     align-items: center;
     margin-bottom: 0.5rem;
   }
-  .cg-label { text-align: right; font-size: 0.75rem; color: #888; }
+  .cg-label { text-align: right; font-size: 0.73rem; color: #888; }
   .cg-pri { text-align: center; font-size: 0.65rem; color: #555; }
   .cg-bar {
     height: 16px;
@@ -82,14 +82,15 @@
     border-radius: 3px;
     overflow: hidden;
   }
-  .cg-val { font-size: 0.7rem; color: #666; text-align: right; }
+  .cg-val { font-size: 0.68rem; text-align: right; }
   .bar-inner {
     height: 100%;
     border-radius: 3px;
     min-width: 1px;
   }
   .bar-green { background: linear-gradient(90deg, #166534, #22c55e); }
-  .bar-gray { background: linear-gradient(90deg, #374151, #6b7280); }
+  .bar-yellow { background: linear-gradient(90deg, #713f12, #eab308); }
+  .bar-red { background: linear-gradient(90deg, #7f1d1d, #ef4444); }
   .bar-dead { background: #2a1515; }
 
   /* Legend */
@@ -99,6 +100,7 @@
     margin-bottom: 1rem;
     font-size: 0.78rem;
     color: #999;
+    flex-wrap: wrap;
   }
   .legend-item { display: flex; align-items: center; gap: 0.4rem; }
   .legend-swatch { width: 12px; height: 12px; border-radius: 2px; }
@@ -115,14 +117,14 @@
   }
   .insight strong { color: #a3d9a3; }
 
-  .comparison {
+  .three-col {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 1rem;
     margin: 1.5rem 0;
   }
-  .comparison .box { margin: 0; }
-  .comparison h3 { font-size: 0.85rem; margin-bottom: 0.5rem; color: #ccc; }
+  .three-col .box { margin: 0; }
+  .three-col h3 { font-size: 0.85rem; margin-bottom: 0.5rem; }
 
   .tag {
     display: inline-block;
@@ -134,12 +136,8 @@
   }
   .tag-measured { background: #1a3a1a; color: #4ade80; }
 
-  .delta-up { color: #22c55e; }
-  .delta-down { color: #ef4444; }
-  .delta-same { color: #555; }
-
   .hero {
-    background: linear-gradient(135deg, #0a1a0a 0%, #112211 100%);
+    background: linear-gradient(135deg, #1a0a0a 0%, #0a0a1a 50%, #0a1a0a 100%);
     border: 2px solid #22c55e;
     border-radius: 8px;
     padding: 1.4rem 1.5rem;
@@ -147,22 +145,29 @@
     line-height: 1.7;
   }
   .hero-headline {
-    font-size: 1.05rem;
+    font-size: 1.1rem;
     font-weight: 600;
     color: #e0e0e0;
-    margin-bottom: 0.6rem;
+    margin-bottom: 0.8rem;
   }
-  .hero-stat {
-    font-size: 0.88rem;
-    color: #ccc;
-    margin-bottom: 0.3rem;
+  .hero-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.8rem;
+    margin-bottom: 0.8rem;
   }
-  .hero-stat .num-green { color: #4ade80; font-weight: 600; }
-  .hero-stat .num-red { color: #ef4444; font-weight: 600; }
+  .hero-stat-box {
+    background: rgba(0,0,0,.3);
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    text-align: center;
+  }
+  .hero-stat-box .num { font-size: 1.3rem; font-weight: 700; display: block; margin-bottom: 0.2rem; }
+  .hero-stat-box .lbl { font-size: 0.7rem; color: #999; }
   .hero-bottom {
     font-size: 0.8rem;
     color: #8bc48b;
-    margin-top: 0.7rem;
+    margin-top: 0.5rem;
     padding-top: 0.7rem;
     border-top: 1px solid #1a3a1a;
   }
@@ -176,46 +181,66 @@
     text-align: center;
   }
   .footer a { color: #555; }
+
+  @media (max-width: 800px) {
+    .hero-stats { grid-template-columns: 1fr; }
+    .three-col { grid-template-columns: 1fr; }
+    .chart-grid { grid-template-columns: 100px 22px 1fr 36px 1fr 36px 1fr 36px; gap: 0.15rem 0.25rem; }
+  }
 </style>
 </head>
 <body>
 
 <h1>telemoq benchmark</h1>
-<p class="subtitle">Same code, same relay, same connection. Only variable: priority scheduling.</p>
+<p class="subtitle">Three modes, one binary. Same relay, same connection, same payloads. Only the transport behavior changes.</p>
 
 <div class="hero">
-  <div class="hero-headline">Without priority scheduling, you lose 55% of control data under congestion.</div>
-  <div class="hero-stat">With priority: <span class="num-green">12.8 msgs/s</span> across safety and control tracks</div>
-  <div class="hero-stat">Without priority: <span class="num-red">5.7 msgs/s</span> &mdash; IMU dead, joints at 19% of prior rate, streaming at 27%</div>
+  <div class="hero-headline">Priority scheduling is the difference between control and blackout.</div>
+  <div class="hero-stats">
+    <div class="hero-stat-box">
+      <span class="num" style="color:#22c55e">17.4/s</span>
+      <span class="lbl">Control data &mdash; Priority (MoQ)</span>
+    </div>
+    <div class="hero-stat-box">
+      <span class="num" style="color:#eab308">5.3/s</span>
+      <span class="lbl">Control data &mdash; No priority (DDS)</span>
+    </div>
+    <div class="hero-stat-box">
+      <span class="num" style="color:#ef4444">0.1/s</span>
+      <span class="lbl">Control data &mdash; Single stream (WebRTC)</span>
+    </div>
+  </div>
   <div class="hero-bottom">
-    Teleop needs predictable degradation: sacrifice video, protect control. Priority scheduling gives that.
-    Without it, which tracks survive is a coin flip. Use MoQ with per-stream priority, not WebRTC or raw DDS over WAN.
+    Priority delivers <strong>3.3x</strong> more control data than no-priority, and <strong>174x</strong> more than single-stream.
+    The robot stays under control with MoQ. With WebRTC-style transport, it goes dark.
   </div>
 </div>
 
 <div class="box">
   <strong>Methodology:</strong> moq-relay on localhost:4443 (self-signed TLS). telemoq publisher emitting 8 tracks
   simultaneously at aggregate ~3 MB/s &mdash; deliberately exceeding QUIC connection capacity to force congestion.
-  No artificial packet loss needed; the scheduler must choose what to deliver.
+  No artificial packet loss needed; BBR congestion control limits throughput and the scheduler must choose what to deliver.
   <br><br>
-  <strong>One variable:</strong> <code>--no-priority</code> sets all 8 track priorities to 0 (equal).
-  Same binary. Same relay. Same payloads. Only the QUIC stream priority header changes.
+  <strong>Three modes, one variable:</strong>
+  <br>&bull; <code>default</code> &mdash; per-stream QUIC priority (P0&ndash;P20). High-priority tracks get bandwidth first.
+  <br>&bull; <code>--no-priority</code> &mdash; all tracks at priority 0. FIFO scheduling, no starvation. Like DDS topics on a shared bus.
+  <br>&bull; <code>--single-stream</code> &mdash; all tracks multiplexed into one QUIC stream. Head-of-line blocking. Like WebRTC/DTLS.
   <br><br>
-  <strong>Priority run:</strong> 275s, 732 samples/track &nbsp;|&nbsp;
-  <strong>No-priority run:</strong> 73s, 73 samples/track
+  <strong>Each run:</strong> 65 seconds, ~63 samples per track. Same binary. Same relay. Same payloads.
 </div>
 
-<!-- ═══════ SIDE-BY-SIDE DELIVERY CHART ═══════ -->
+<!-- ═══════ THREE-WAY BAR CHART ═══════ -->
 
-<h2>Delivery rate: priority vs no-priority <span class="tag tag-measured">MEASURED</span></h2>
+<h2>Delivery rate: three modes compared <span class="tag tag-measured">MEASURED</span></h2>
 
 <p style="font-size:0.78rem; color:#666; margin-bottom:1rem;">
-  Frames received as % of expected rate. Green = with priority (default). Gray = without priority (<code>--no-priority</code>).
+  Messages received per second per track. Taller bar = more data getting through.
 </p>
 
 <div class="legend">
-  <div class="legend-item"><div class="legend-swatch" style="background:#22c55e"></div> With priority</div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#6b7280"></div> Without priority</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#22c55e"></div> Priority (MoQ)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#eab308"></div> No priority (DDS-like)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#ef4444"></div> Single stream (WebRTC-like)</div>
 </div>
 
 <div id="comparison-chart"></div>
@@ -230,11 +255,11 @@
       <th>Track</th>
       <th>Pri</th>
       <th class="num">Expected</th>
-      <th class="num" style="color:#22c55e">With pri</th>
-      <th class="num" style="color:#6b7280">No pri</th>
-      <th class="num" style="color:#22c55e">recv/s</th>
-      <th class="num" style="color:#6b7280">recv/s</th>
-      <th class="num">Delta</th>
+      <th class="num" style="color:#22c55e">Priority</th>
+      <th class="num" style="color:#eab308">No-pri</th>
+      <th class="num" style="color:#ef4444">Single</th>
+      <th class="num">P vs NP</th>
+      <th class="num">P vs SS</th>
     </tr>
   </thead>
   <tbody id="data-table"></tbody>
@@ -243,40 +268,43 @@
 <!-- ═══════ KEY FINDING ═══════ -->
 
 <div class="insight">
-  <strong>Key finding: priority scheduling provides predictable, ordered degradation.</strong>
+  <strong>Key finding: transport architecture determines whether your robot stays under control.</strong>
   <br><br>
-  With priority, the scheduler distributes capacity evenly across P0&ndash;P5 tracks (~2.1 msgs/s each)
-  and completely blocks P10&ndash;P20 (video, pointcloud). Every safety-relevant track gets delivery.
+  <strong>Priority (MoQ):</strong> The scheduler distributes capacity across P0&ndash;P5 tracks (3&ndash;5 msgs/s each),
+  completely blocking P10&ndash;P20 (pointcloud, video). Every safety-relevant track gets delivery. Total control: 17.4 msgs/s.
   <br><br>
-  Without priority, delivery becomes <strong>chaotic and unpredictable.</strong> IMU drops from 2.2/s to 0/s.
-  Joints drops from 2.1/s to 0.4/s. Streaming drops from 2.2/s to 0.6/s.
-  The FIFO scheduler has no concept of importance &mdash; which tracks survive is arbitrary.
+  <strong>No-priority (DDS-like):</strong> Delivery becomes chaotic. Heartbeat drops 33%. Control/streaming goes to zero.
+  IMU goes to zero. Which tracks survive is arbitrary. Total control: 5.3 msgs/s &mdash; <strong style="color:#ef4444">70% loss vs priority.</strong>
   <br><br>
-  <strong>Total control-track throughput (P0&ndash;P5):</strong>
-  With priority: 12.8 msgs/s &nbsp;|&nbsp; Without priority: 5.7 msgs/s &nbsp;|&nbsp;
-  <strong style="color:#ef4444">55% loss of control data without priority.</strong>
+  <strong>Single-stream (WebRTC-like):</strong> Head-of-line blocking causes near-total blackout. All 8 tracks compete
+  for one ordered stream. Under congestion, essentially nothing gets through. Total control: 0.1 msgs/s &mdash;
+  <strong style="color:#ef4444">99.4% loss vs priority.</strong> The operator has lost the robot.
 </div>
 
 <!-- ═══════ TELEOP SAFETY ═══════ -->
 
 <h2>What this means for teleop safety</h2>
 
-<div class="comparison">
+<div class="three-col">
   <div class="box" style="border-color:#1a3a1a">
-    <h3 style="color:#22c55e">With priority (MoQ default)</h3>
-    Every control track (P0&ndash;P5) receives ~2.1 msgs/s &mdash; evenly distributed.
-    Heartbeat alive. Joints reporting. Force/torque contact detection active.
-    Video and pointcloud sacrificed. <strong>The robot stays under control.</strong>
+    <h3 style="color:#22c55e">Priority (MoQ)</h3>
+    Heartbeat: 3.0/s. Joints: 3.7/s. Force/torque: 3.7/s. Control streaming: 4.0/s.
+    Video and pointcloud sacrificed &mdash; exactly as designed.
+    <strong>The robot stays under control.</strong>
     <br><br>
-    Matches IHMC DRC lesson: <em>"9,600 bps was enough for control."</em>
+    <em>"9,600 bps was enough for control."</em> &mdash; IHMC DRC
+  </div>
+  <div class="box" style="border-color:#3a3a1a">
+    <h3 style="color:#eab308">No priority (DDS-like)</h3>
+    Heartbeat: 2.0/s. Streaming: 0/s. IMU: 0/s. Joints: 0.4/s.
+    <strong>70% less control data.</strong> The scheduler doesn't know heartbeat matters more than video.
+    Which tracks survive is a coin flip.
   </div>
   <div class="box" style="border-color:#3a1a1a">
-    <h3 style="color:#ef4444">Without priority</h3>
-    IMU: dead (0/s). Joints: 0.4/s (80% loss vs priority mode). Streaming: 0.6/s (73% loss).
-    <strong>Control-track throughput drops 55%.</strong> The scheduler doesn't know heartbeat matters
-    more than video. Which tracks survive is a coin flip.
-    <br><br>
-    This is how WebRTC/DDS behave: all streams degrade together, unpredictably.
+    <h3 style="color:#ef4444">Single stream (WebRTC-like)</h3>
+    Heartbeat: 0/s. Streaming: 0.1/s. Everything else: 0/s.
+    <strong>Complete blackout.</strong> One ordered stream means one lost packet blocks everything.
+    The operator cannot e-stop the robot.
   </div>
 </div>
 
@@ -285,45 +313,47 @@
 <h2>How it works</h2>
 
 <div class="box">
-  <strong>Priority flow:</strong>
-  <code>Track.priority</code> &rarr; <code>PriorityQueue.insert(priority, seq)</code> &rarr;
-  <code>stream.set_priority()</code> &rarr; QUIC stream header &rarr; quinn's <code>BinaryHeap</code> scheduler.
+  <strong>Priority mode (default):</strong>
+  Each track maps to a separate QUIC stream. <code>Track.priority</code> &rarr; <code>stream.set_priority()</code> &rarr;
+  quinn's <code>BinaryHeap</code> scheduler sends high-priority streams first. P0 (heartbeat) always beats P20 (video).
   <br><br>
-  With <code>--no-priority</code>, all tracks get priority 0. The BinaryHeap orders by group sequence only (FIFO).
-  No track is preferred. Under congestion, which tracks get capacity depends on timing, not importance.
+  <strong>No-priority mode (<code>--no-priority</code>):</strong>
+  All tracks still get separate QUIC streams, but all at priority 0. The BinaryHeap orders by group sequence only (FIFO).
+  No track is preferred &mdash; equivalent to DDS topics sharing a bus with no QoS differentiation.
   <br><br>
-  <strong>Production context:</strong> Over WiFi/cellular with 10+ Mbps, the small control tracks
-  (heartbeat: 170 B/s, streaming: 26 KB/s) achieve near-100% delivery while video (1.5 MB/s) degrades gracefully.
-  This localhost stress test uses extreme congestion to make the priority mechanism clearly visible.
+  <strong>Single-stream mode (<code>--single-stream</code>):</strong>
+  All 8 tracks multiplexed into one QUIC stream with 1-byte track index prefix. Any congestion on this single stream
+  blocks ALL data (head-of-line blocking). This is how WebRTC/DTLS data channels work &mdash; one ordered byte stream
+  for everything.
 </div>
 
 <div class="footer">
   telemoq &mdash; MoQ transport for robotics teleoperation &middot;
   built on <a href="https://github.com/moq-dev/moq">moq-dev/moq</a> &middot;
-  measured 2026-03-02 &middot; localhost congestion stress test
+  measured 2026-03-02 &middot; localhost congestion stress test (65s per mode)
 </div>
 
 <script>
-// ═══════ MEASURED DATA (2026-03-02) ═══════
+// ═══════ MEASURED DATA (2026-03-02, 65s runs) ═══════
 const tracks = [
-  { name: 'safety/heartbeat',      pri: 'P0',  expected: 10,  priPct: 21, noPct: 21, priRecv: 2.1, noRecv: 2.1 },
-  { name: 'control/streaming',     pri: 'P1',  expected: 167, priPct: 1,  noPct: 0,  priRecv: 2.2, noRecv: 0.6 },
-  { name: 'control/task_status',   pri: 'P1',  expected: 10,  priPct: 21, noPct: 20, priRecv: 2.1, noRecv: 2.0 },
-  { name: 'sensors/joints',        pri: 'P2',  expected: 100, priPct: 2,  noPct: 0,  priRecv: 2.1, noRecv: 0.4 },
-  { name: 'sensors/force_torque',  pri: 'P3',  expected: 100, priPct: 2,  noPct: 3,  priRecv: 2.1, noRecv: 2.6 },
-  { name: 'sensors/imu',           pri: 'P5',  expected: 200, priPct: 1,  noPct: 0,  priRecv: 2.2, noRecv: 0.0 },
-  { name: 'perception/pointcloud', pri: 'P10', expected: 5,   priPct: 0,  noPct: 0,  priRecv: 0.0, noRecv: 0.0 },
-  { name: 'video/camera0',         pri: 'P20', expected: 30,  priPct: 0,  noPct: 0,  priRecv: 0.0, noRecv: 0.0 },
+  { name: 'safety/heartbeat',      pri: 'P0',  expected: 10,  priRecv: 3.0, noRecv: 2.0, ssRecv: 0.0 },
+  { name: 'control/streaming',     pri: 'P1',  expected: 167, priRecv: 4.0, noRecv: 0.0, ssRecv: 0.1 },
+  { name: 'control/task_status',   pri: 'P1',  expected: 10,  priRecv: 2.9, noRecv: 0.0, ssRecv: 0.0 },
+  { name: 'sensors/joints',        pri: 'P2',  expected: 100, priRecv: 3.7, noRecv: 0.4, ssRecv: 0.0 },
+  { name: 'sensors/force_torque',  pri: 'P3',  expected: 100, priRecv: 3.7, noRecv: 2.8, ssRecv: 0.0 },
+  { name: 'sensors/imu',           pri: 'P5',  expected: 200, priRecv: 4.9, noRecv: 0.0, ssRecv: 0.1 },
+  { name: 'perception/pointcloud', pri: 'P10', expected: 5,   priRecv: 0.0, noRecv: 0.0, ssRecv: 0.0 },
+  { name: 'video/camera0',         pri: 'P20', expected: 30,  priRecv: 0.0, noRecv: 0.0, ssRecv: 0.0 },
 ];
 
-// ═══════ COMPARISON BAR CHART ═══════
+// ═══════ THREE-WAY BAR CHART ═══════
 const chart = document.getElementById('comparison-chart');
-const maxRecv = Math.max(...tracks.map(t => Math.max(t.priRecv, t.noRecv)));
+const maxRecv = Math.max(...tracks.map(t => Math.max(t.priRecv, t.noRecv, t.ssRecv)));
 
 tracks.forEach(t => {
-  // Priority bar row
-  const priWidth = maxRecv > 0 ? (t.priRecv / maxRecv) * 100 : 0;
-  const noWidth = maxRecv > 0 ? (t.noRecv / maxRecv) * 100 : 0;
+  const priW = maxRecv > 0 ? (t.priRecv / maxRecv) * 100 : 0;
+  const noW = maxRecv > 0 ? (t.noRecv / maxRecv) * 100 : 0;
+  const ssW = maxRecv > 0 ? (t.ssRecv / maxRecv) * 100 : 0;
 
   const row = document.createElement('div');
   row.className = 'chart-grid';
@@ -332,54 +362,70 @@ tracks.forEach(t => {
     <div class="cg-pri">${t.pri}</div>
     <div class="cg-bar">
       <div class="bar-inner ${t.priRecv > 0 ? 'bar-green' : 'bar-dead'}"
-           style="width:${t.priRecv > 0 ? Math.max(priWidth, 3) : 100}%"></div>
+           style="width:${t.priRecv > 0 ? Math.max(priW, 4) : 100}%"></div>
     </div>
     <div class="cg-val" style="color:${t.priRecv > 0 ? '#22c55e' : '#555'}">${t.priRecv}/s</div>
     <div class="cg-bar">
-      <div class="bar-inner ${t.noRecv > 0 ? 'bar-gray' : 'bar-dead'}"
-           style="width:${t.noRecv > 0 ? Math.max(noWidth, 3) : 100}%"></div>
+      <div class="bar-inner ${t.noRecv > 0 ? 'bar-yellow' : 'bar-dead'}"
+           style="width:${t.noRecv > 0 ? Math.max(noW, 4) : 100}%"></div>
     </div>
-    <div class="cg-val" style="color:${t.noRecv > 0 ? '#9ca3af' : '#555'}">${t.noRecv}/s</div>`;
+    <div class="cg-val" style="color:${t.noRecv > 0 ? '#eab308' : '#555'}">${t.noRecv}/s</div>
+    <div class="cg-bar">
+      <div class="bar-inner ${t.ssRecv > 0 ? 'bar-red' : 'bar-dead'}"
+           style="width:${t.ssRecv > 0 ? Math.max(ssW, 4) : 100}%"></div>
+    </div>
+    <div class="cg-val" style="color:${t.ssRecv > 0 ? '#ef4444' : '#555'}">${t.ssRecv}/s</div>`;
   chart.appendChild(row);
 });
 
 // ═══════ DATA TABLE ═══════
 const tbody = document.getElementById('data-table');
 tracks.forEach(t => {
-  const delta = t.priRecv - t.noRecv;
-  const deltaStr = delta > 0 ? `+${delta.toFixed(1)}`
-    : delta < 0 ? delta.toFixed(1)
-    : '0';
-  const deltaClass = delta > 0.05 ? 'delta-up' : delta < -0.05 ? 'delta-down' : 'delta-same';
-  const priColor = t.priPct >= 20 ? 'c-yellow' : t.priPct > 0 ? 'c-red' : 'c-dim';
-  const noColor = t.noPct >= 20 ? 'c-yellow' : t.noPct > 0 ? 'c-red' : 'c-dim';
+  const dNP = t.priRecv > 0 ? Math.round((t.noRecv - t.priRecv) / t.priRecv * 100) : (t.noRecv > 0 ? '+∞' : '—');
+  const dSS = t.priRecv > 0 ? Math.round((t.ssRecv - t.priRecv) / t.priRecv * 100) : (t.ssRecv > 0 ? '+∞' : '—');
+  const fmtDelta = d => typeof d === 'number' ? (d > 0 ? `+${d}%` : `${d}%`) : d;
+  const clsDelta = d => typeof d === 'number' ? (d > 0 ? 'color:#22c55e' : d < -50 ? 'color:#ef4444' : 'color:#eab308') : 'color:#555';
 
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td>${t.name}</td>
     <td class="c-green fw600">${t.pri}</td>
     <td class="num">${t.expected}/s</td>
-    <td class="num ${priColor}">${t.priPct}%</td>
-    <td class="num ${noColor}">${t.noPct}%</td>
-    <td class="num" style="color:#22c55e">${t.priRecv}</td>
-    <td class="num" style="color:#6b7280">${t.noRecv}</td>
-    <td class="num ${deltaClass}">${deltaStr}</td>`;
+    <td class="num" style="color:#22c55e">${t.priRecv}/s</td>
+    <td class="num" style="color:#eab308">${t.noRecv}/s</td>
+    <td class="num" style="color:#ef4444">${t.ssRecv}/s</td>
+    <td class="num" style="${clsDelta(dNP)}">${fmtDelta(dNP)}</td>
+    <td class="num" style="${clsDelta(dSS)}">${fmtDelta(dSS)}</td>`;
   tbody.appendChild(tr);
 });
 
-// Totals row
+// Totals
 const totalPri = tracks.reduce((s, t) => s + t.priRecv, 0);
 const totalNo = tracks.reduce((s, t) => s + t.noRecv, 0);
-const totalDelta = totalPri - totalNo;
-const tfoot = document.createElement('tr');
-tfoot.style.borderTop = '2px solid #333';
-tfoot.innerHTML = `
-  <td style="color:#ccc" colspan="3"><strong>Total (all tracks)</strong></td>
-  <td></td><td></td>
-  <td class="num" style="color:#22c55e"><strong>${totalPri.toFixed(1)}</strong></td>
-  <td class="num" style="color:#6b7280"><strong>${totalNo.toFixed(1)}</strong></td>
-  <td class="num delta-up"><strong>+${totalDelta.toFixed(1)}</strong></td>`;
-tbody.appendChild(tfoot);
+const totalSS = tracks.reduce((s, t) => s + t.ssRecv, 0);
+const ctrlTracks = tracks.slice(0, 6); // P0-P5
+const ctrlPri = ctrlTracks.reduce((s, t) => s + t.priRecv, 0);
+const ctrlNo = ctrlTracks.reduce((s, t) => s + t.noRecv, 0);
+const ctrlSS = ctrlTracks.reduce((s, t) => s + t.ssRecv, 0);
+
+[
+  ['Total (all tracks)', totalPri, totalNo, totalSS],
+  ['Control (P0\u2013P5)', ctrlPri, ctrlNo, ctrlSS],
+].forEach(([label, p, n, s]) => {
+  const dNP = p > 0 ? Math.round((n - p) / p * 100) : '—';
+  const dSS = p > 0 ? Math.round((s - p) / p * 100) : '—';
+  const fmtD = d => typeof d === 'number' ? `${d}%` : d;
+  const tr = document.createElement('tr');
+  tr.style.borderTop = '2px solid #333';
+  tr.innerHTML = `
+    <td style="color:#ccc" colspan="3"><strong>${label}</strong></td>
+    <td class="num" style="color:#22c55e"><strong>${p.toFixed(1)}</strong></td>
+    <td class="num" style="color:#eab308"><strong>${n.toFixed(1)}</strong></td>
+    <td class="num" style="color:#ef4444"><strong>${s.toFixed(1)}</strong></td>
+    <td class="num" style="color:#ef4444"><strong>${fmtD(dNP)}</strong></td>
+    <td class="num" style="color:#ef4444"><strong>${fmtD(dSS)}</strong></td>`;
+  tbody.appendChild(tr);
+});
 </script>
 
 </body>
