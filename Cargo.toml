@@ -1,0 +1,20 @@
+[package]
+name = "telemoq"
+version = "0.1.0"
+edition = "2024"
+description = "MoQ transport for robotics teleoperation"
+repository = "https://github.com/alltheseas/telemoq"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+moq-lite = { path = "../lumina-video/moq/rs/moq-lite" }
+moq-native = { path = "../lumina-video/moq/rs/moq-native", default-features = true }
+
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+url = "2"
+bytes = "1"
+anyhow = "1"
+bincode = "1"
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
