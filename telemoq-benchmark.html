@@ -198,7 +198,7 @@
   <div class="hero-headline">Priority scheduling is the difference between control and blackout.</div>
   <div class="hero-stats">
     <div class="hero-stat-box">
-      <span class="num" style="color:#22c55e">17.4/s</span>
+      <span class="num" style="color:#22c55e">22.2/s</span>
       <span class="lbl">Control data &mdash; Priority (MoQ)</span>
     </div>
     <div class="hero-stat-box">
@@ -206,12 +206,12 @@
       <span class="lbl">Control data &mdash; No priority (DDS)</span>
     </div>
     <div class="hero-stat-box">
-      <span class="num" style="color:#ef4444">0.1/s</span>
+      <span class="num" style="color:#ef4444">0.2/s</span>
       <span class="lbl">Control data &mdash; Single stream (WebRTC)</span>
     </div>
   </div>
   <div class="hero-bottom">
-    Priority delivers <strong>3.3x</strong> more control data than no-priority, and <strong>174x</strong> more than single-stream.
+    Priority delivers <strong>4.2x</strong> more control data than no-priority, and <strong>95x</strong> more than single-stream.
     The robot stays under control with MoQ. With WebRTC-style transport, it goes dark.
   </div>
 </div>
@@ -226,7 +226,7 @@
   <br>&bull; <code>--no-priority</code> &mdash; all tracks at priority 0. FIFO scheduling, no starvation. Like DDS topics on a shared bus.
   <br>&bull; <code>--single-stream</code> &mdash; all tracks multiplexed into one QUIC stream. Head-of-line blocking. Like WebRTC/DTLS.
   <br><br>
-  <strong>Each run:</strong> 65 seconds, ~63 samples per track. Same binary. Same relay. Same payloads.
+  <strong>Each run:</strong> ~63 seconds, ~63 samples per track. Same binary. Same relay. Same payloads.
 </div>
 
 <!-- ═══════ THREE-WAY BAR CHART ═══════ -->
@@ -271,14 +271,14 @@
   <strong>Key finding: transport architecture determines whether your robot stays under control.</strong>
   <br><br>
   <strong>Priority (MoQ):</strong> The scheduler distributes capacity across P0&ndash;P5 tracks (3&ndash;5 msgs/s each),
-  completely blocking P10&ndash;P20 (pointcloud, video). Every safety-relevant track gets delivery. Total control: 17.4 msgs/s.
+  completely blocking P10&ndash;P20 (pointcloud, video). Every safety-relevant track gets delivery. Total control: 22.2 msgs/s.
   <br><br>
   <strong>No-priority (DDS-like):</strong> Delivery becomes chaotic. Heartbeat drops 33%. Control/streaming goes to zero.
-  IMU goes to zero. Which tracks survive is arbitrary. Total control: 5.3 msgs/s &mdash; <strong style="color:#ef4444">70% loss vs priority.</strong>
+  IMU goes to zero. Which tracks survive is arbitrary. Total control: 5.3 msgs/s &mdash; <strong style="color:#ef4444">76% loss vs priority.</strong>
   <br><br>
   <strong>Single-stream (WebRTC-like):</strong> Head-of-line blocking causes near-total blackout. All 8 tracks compete
-  for one ordered stream. Under congestion, essentially nothing gets through. Total control: 0.1 msgs/s &mdash;
-  <strong style="color:#ef4444">99.4% loss vs priority.</strong> The operator has lost the robot.
+  for one ordered stream. Under congestion, essentially nothing gets through. Total control: 0.2 msgs/s &mdash;
+  <strong style="color:#ef4444">99% loss vs priority.</strong> The operator has lost the robot.
 </div>
 
 <!-- ═══════ TELEOP SAFETY ═══════ -->
@@ -330,7 +330,7 @@
 <div class="footer">
   telemoq &mdash; MoQ transport for robotics teleoperation &middot;
   built on <a href="https://github.com/moq-dev/moq">moq-dev/moq</a> &middot;
-  measured 2026-03-02 &middot; localhost congestion stress test (65s per mode)
+  measured 2026-03-02 &middot; localhost congestion stress test (~63s per mode)
 </div>
 
 <script>

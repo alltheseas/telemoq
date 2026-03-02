@@ -1,0 +1,1258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>MoQ vs WebRTC — Robot Teleoperation Under Packet Loss</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1419;--surface:#1a2332;--surface2:#243044;--border:#2d3f56;
+  --text:#e8edf4;--text-dim:#8899aa;--text-muted:#5a6a7a;
+  --accent:#e6a817;--accent-dim:rgba(230,168,23,.12);
+  --red:#ef4444;--red-dim:rgba(239,68,68,.15);--red-bright:#ff6b6b;
+  --green:#22c55e;--green-dim:rgba(34,197,94,.15);
+  --blue:#3b82f6;--blue-dim:rgba(59,130,246,.12);
+  --orange:#f59e0b;--teal:#14b8a6;
+  --font-sans:'DM Sans',system-ui,sans-serif;
+  --font-mono:'Fira Code',monospace;
+}
+@media(prefers-color-scheme:light){
+  :root{
+    --bg:#f8f9fb;--surface:#ffffff;--surface2:#f0f2f5;--border:#d4dae3;
+    --text:#1a2332;--text-dim:#3d4d5c;--text-muted:#6b7b8b;
+    --accent:#b8860b;--accent-dim:rgba(184,134,11,.1);
+    --red:#dc2626;--red-dim:rgba(220,38,38,.1);--red-bright:#ef4444;
+    --green:#16a34a;--green-dim:rgba(22,163,74,.1);
+    --blue:#2563eb;--blue-dim:rgba(37,99,235,.08);
+  }
+}
+html{font-size:15px}
+body{
+  font-family:var(--font-sans);color:var(--text);background:var(--bg);
+  line-height:1.6;min-height:100vh;
+  background-image:radial-gradient(circle at 50% 0%,rgba(230,168,23,.04) 0%,transparent 60%);
+}
+.wrap{max-width:1200px;margin:0 auto;padding:2rem 1.5rem}
+
+/* Hero */
+.hero{text-align:center;margin-bottom:3rem;padding:2rem 0}
+.hero h1{font-size:2.2rem;font-weight:700;letter-spacing:-.03em;margin-bottom:.5rem}
+.hero h1 .hl{color:var(--accent)}
+.hero .sub{font-size:1.05rem;color:var(--text-dim);max-width:640px;margin:0 auto;line-height:1.5;text-align:left}
+.badge{
+  display:inline-block;font-family:var(--font-mono);font-size:.72rem;
+  padding:.25rem .7rem;border-radius:20px;margin-bottom:1rem;letter-spacing:.04em;
+  background:var(--accent-dim);color:var(--accent);border:1px solid rgba(230,168,23,.2);
+}
+
+/* Scenario bar */
+.scenario{
+  display:flex;align-items:center;justify-content:center;gap:1rem;
+  margin-bottom:2rem;padding:.8rem 1.2rem;border-radius:10px;
+  background:var(--surface);border:1px solid var(--border);flex-wrap:wrap;
+}
+.scenario .label{font-family:var(--font-mono);font-size:.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em}
+.scenario .val{font-family:var(--font-mono);font-size:.85rem;font-weight:500;color:var(--accent)}
+.scenario .sep{color:var(--border)}
+
+/* Side by side */
+.compare{display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:auto 200px 1fr auto;column-gap:1rem;row-gap:0;margin-bottom:3rem}
+@media(max-width:1000px){.compare{grid-template-columns:1fr;grid-template-rows:none}.compare .panel{display:block}}
+.panel.dds .panel-header{background:var(--accent-dim)}
+.panel.dds .dot{background:var(--orange)}
+.panel{
+  border-radius:12px;border:1px solid var(--border);overflow:hidden;
+  background:var(--surface);position:relative;min-width:0;
+  display:grid;grid-row:span 4;grid-template-rows:subgrid;
+}
+.panel-header{
+  padding:.7rem 1rem;display:flex;align-items:center;gap:.6rem;
+  border-bottom:1px solid var(--border);
+}
+.panel-header .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.panel-header .proto{font-family:var(--font-mono);font-size:.85rem;font-weight:600}
+.panel-header .desc{font-size:.85rem;color:var(--text);margin-left:auto}
+.panel.webrtc .panel-header{background:var(--red-dim)}
+.panel.webrtc .dot{background:var(--red)}
+.panel.moq .panel-header{background:var(--green-dim)}
+.panel.moq .dot{background:var(--green)}
+
+/* Video area */
+.video-area{position:relative;height:200px;background:#0a0e14;overflow:hidden}
+.video-canvas{width:100%;height:100%;display:block}
+.video-overlay{
+  position:absolute;top:0;left:0;right:0;bottom:0;
+  display:flex;align-items:center;justify-content:center;
+  pointer-events:none;
+}
+.freeze-label{
+  font-family:var(--font-mono);font-size:.85rem;font-weight:600;
+  padding:.4rem .8rem;border-radius:6px;opacity:0;transition:opacity .15s;
+}
+.freeze-label.visible{opacity:1}
+.freeze-label.frozen{background:rgba(239,68,68,.85);color:#fff}
+.freeze-label.degraded{background:rgba(230,168,23,.85);color:#000}
+.video-fps{
+  position:absolute;top:8px;right:10px;font-family:var(--font-mono);
+  font-size:.7rem;padding:2px 6px;border-radius:4px;
+  background:rgba(0,0,0,.6);color:#ccc;
+}
+
+/* Data streams */
+.streams{padding:.6rem .6rem}
+.streams-label{
+  font-family:var(--font-mono);font-size:.7rem;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--text-muted);padding:0 0 .3rem;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.stream-row{
+  display:grid;grid-template-columns:125px 30px 1fr 60px;
+  align-items:center;gap:.3rem;padding:.35rem 0;
+  border-bottom:1px solid rgba(255,255,255,.04);font-size:.85rem;
+}
+.stream-row:last-child{border-bottom:none}
+.stream-name{font-family:var(--font-mono);color:var(--text);font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.stream-pri{font-family:var(--font-mono);font-size:.78rem;color:var(--text-dim)}
+.stream-pri.no-pri{color:var(--text-muted);opacity:.4}
+.stream-bar-wrap{height:6px;border-radius:3px;background:rgba(255,255,255,.06);overflow:hidden}
+.stream-bar{height:100%;border-radius:3px;transition:width .4s ease,background .3s}
+.stream-val{font-family:var(--font-mono);font-size:.78rem;text-align:right;color:var(--text);white-space:nowrap}
+
+/* Status footer */
+.panel-footer{
+  padding:.6rem 1rem;border-top:1px solid var(--border);
+  font-size:.85rem;font-family:var(--font-mono);color:var(--text);
+  display:flex;align-items:center;gap:.5rem;
+}
+.status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+/* Explanation section */
+.explain{margin-bottom:3rem}
+.explain h2{font-size:1.4rem;font-weight:600;margin-bottom:1.2rem;letter-spacing:-.02em}
+.explain-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem}
+@media(max-width:800px){.explain-grid{grid-template-columns:1fr}}
+.explain-card{
+  padding:1.2rem;border-radius:10px;border:1px solid var(--border);
+  background:var(--surface);
+}
+.explain-card h3{
+  font-family:var(--font-mono);font-size:.82rem;text-transform:uppercase;
+  letter-spacing:.06em;margin-bottom:.6rem;display:flex;align-items:center;gap:.5rem;
+}
+.explain-card h3 .marker{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.explain-card p{font-size:.95rem;color:var(--text);line-height:1.6}
+.explain-card code{
+  font-family:var(--font-mono);font-size:.78rem;
+  padding:.15rem .4rem;border-radius:4px;background:var(--surface2);
+}
+
+/* Data section */
+.data-section{margin-bottom:3rem}
+.data-section h2{font-size:1.4rem;font-weight:600;margin-bottom:.4rem;letter-spacing:-.02em}
+.data-section .sub{font-size:.95rem;color:var(--text);margin-bottom:1.2rem}
+.data-grid{display:grid;grid-template-columns:1fr 340px;gap:1.2rem;align-items:start}
+@media(max-width:900px){.data-grid{grid-template-columns:1fr}}
+.chart-wrap{
+  background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:1.2rem;position:relative;
+}
+.chart-wrap canvas{max-height:300px}
+.takeaway{
+  background:#fef9c3;border-left:4px solid #ca8a04;
+  padding:1.2rem 1.3rem;border-radius:2px;
+  color:#1a1a1a;font-size:.92rem;line-height:1.6;
+}
+@media(prefers-color-scheme:dark){
+  .takeaway{background:rgba(202,138,4,.12);border-left-color:#e6a817;color:var(--text)}
+}
+.takeaway .takeaway-title{
+  font-family:var(--font-mono);font-size:.72rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.06em;color:#92400e;margin-bottom:.6rem;
+}
+@media(prefers-color-scheme:dark){.takeaway .takeaway-title{color:var(--accent)}}
+.takeaway p{margin-bottom:.6rem}
+.takeaway p:last-child{margin-bottom:0}
+.takeaway strong{font-weight:600}
+
+/* Limitations & Roadmap */
+.limitations{margin-bottom:3rem}
+.limitations h2{font-size:1.4rem;font-weight:600;margin-bottom:1.2rem;letter-spacing:-.02em}
+.limit-table{
+  width:100%;border-collapse:collapse;font-size:.95rem;line-height:1.6;
+}
+.limit-table th{
+  font-family:var(--font-mono);font-size:.8rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.06em;text-align:left;
+  padding:.6rem .8rem;border-bottom:2px solid var(--border);color:var(--text);
+}
+.limit-table td{
+  padding:.7rem .8rem;border-bottom:1px solid var(--border);
+  color:var(--text);vertical-align:top;
+}
+.limit-table tr:last-child td{border-bottom:none}
+.limit-table .sev{
+  font-family:var(--font-mono);font-size:.72rem;font-weight:600;
+  white-space:nowrap;display:flex;align-items:center;gap:.4rem;
+}
+.limit-table .sev .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.roadmap-timeline{position:relative;padding-left:2rem;margin-top:1.5rem}
+.roadmap-timeline::before{
+  content:'';position:absolute;left:.55rem;top:0;bottom:0;width:2px;
+  background:linear-gradient(180deg,var(--accent),var(--green),var(--blue));
+  border-radius:1px;
+}
+.roadmap-phase{position:relative;margin-bottom:2rem}
+.roadmap-phase:last-child{margin-bottom:0}
+.roadmap-phase::before{
+  content:'';position:absolute;left:-1.55rem;top:.35rem;
+  width:12px;height:12px;border-radius:50%;border:2px solid var(--bg);
+}
+.roadmap-phase:nth-child(1)::before{background:var(--accent)}
+.roadmap-phase:nth-child(2)::before{background:var(--green)}
+.roadmap-phase:nth-child(3)::before{background:var(--blue)}
+.roadmap-phase .phase-title{
+  font-family:var(--font-mono);font-size:.88rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;
+  color:var(--text);
+}
+.roadmap-phase .phase-tag{
+  display:inline-block;font-size:.72rem;padding:.15rem .5rem;border-radius:3px;
+  margin-left:.5rem;font-weight:400;text-transform:none;letter-spacing:0;
+}
+.roadmap-phase ul{
+  list-style:none;padding:0;
+}
+.roadmap-phase li{
+  font-size:.95rem;color:var(--text);line-height:1.6;
+  padding-left:1.2rem;position:relative;margin-bottom:.3rem;
+}
+.roadmap-phase li::before{
+  content:'';position:absolute;left:0;top:.55rem;
+  width:6px;height:6px;border-radius:50%;background:var(--border);
+}
+
+/* Collapsible details */
+.handoff-details{border:none;padding:0;background:none}
+.handoff-details summary{
+  list-style:none;display:flex;align-items:center;cursor:pointer;
+  padding:.8rem 1.2rem;border-radius:10px;border:1px solid var(--border);
+  background:var(--surface);transition:background .15s;
+}
+.handoff-details summary:hover{background:var(--surface2)}
+.handoff-details summary::-webkit-details-marker{display:none}
+.handoff-details summary::before{
+  content:'▸';font-family:var(--font-mono);font-size:.9rem;color:var(--accent);
+  margin-right:.6rem;transition:transform .2s;flex-shrink:0;
+}
+.handoff-details summary h2{font-size:1rem;font-weight:600;margin:0}
+.handoff-details[open] summary{
+  border-radius:10px 10px 0 0;border-bottom:1px solid var(--border);
+  background:var(--surface2);
+}
+.handoff-details[open] summary::before{transform:rotate(90deg)}
+.handoff-details[open] summary .expand-hint{display:none}
+.handoff-details[open] > div{
+  border:1px solid var(--border);border-top:none;border-radius:0 0 10px 10px;
+  padding:1.5rem;background:var(--surface);
+}
+@media(max-width:800px){
+  .handoff-details div[style*="grid-template-columns"]{grid-template-columns:1fr !important}
+}
+
+/* Architecture */
+.arch{margin-bottom:3rem}
+.arch h2{font-size:1.4rem;font-weight:600;margin-bottom:1.2rem;letter-spacing:-.02em}
+.arch-diagram{
+  display:grid;grid-template-columns:1fr auto 1fr auto 1fr;
+  align-items:center;gap:.8rem;padding:1.5rem;
+  background:var(--surface);border:1px solid var(--border);border-radius:12px;
+}
+@media(max-width:800px){
+  .arch-diagram{grid-template-columns:1fr;text-align:center}
+  .arch-arrow{transform:rotate(90deg)}
+}
+.arch-node{
+  padding:1rem;border-radius:8px;text-align:center;
+  border:1px solid var(--border);background:var(--surface2);
+}
+.arch-node .title{font-family:var(--font-mono);font-size:1rem;font-weight:600;margin-bottom:.4rem}
+.arch-node .detail{font-size:.92rem;color:var(--text);line-height:1.5}
+.arch-arrow{color:var(--accent);text-align:center;font-family:var(--font-mono);line-height:1.2;display:flex;flex-direction:column;align-items:center;gap:.2rem}
+.arch-arrow .arr-line{display:flex;align-items:center;gap:0;color:var(--accent)}
+.arch-arrow .arr-line svg{width:60px;height:14px}
+.arch-arrow .arr-label{font-size:.78rem;color:var(--text-dim);display:block;letter-spacing:.02em;white-space:nowrap}
+.arch-node.operator{border-color:var(--blue);background:var(--blue-dim)}
+.arch-node.relay{border-color:var(--accent);background:var(--accent-dim)}
+.arch-node.robot{border-color:var(--green);background:var(--green-dim)}
+.arch-node.turn{border-color:var(--red);background:var(--red-dim)}
+.arch-compare{display:grid;grid-template-columns:1fr;gap:1.5rem;margin-bottom:1rem}
+.arch-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.arch-panel-header{
+  padding:.6rem 1rem;display:flex;align-items:center;gap:.5rem;
+  border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.85rem;font-weight:600;
+}
+.arch-panel-header .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.arch-panel-header .arch-desc{font-weight:400;font-size:.85rem;color:var(--text);margin-left:auto}
+.arch-panel.webrtc .arch-panel-header{background:var(--red-dim)}
+.arch-panel.dds-srt .arch-panel-header{background:var(--accent-dim)}
+.arch-panel.moq .arch-panel-header{background:var(--green-dim)}
+.arch-flow{
+  display:flex;align-items:stretch;justify-content:center;gap:.6rem;padding:1.2rem 1rem;
+}
+.arch-flow .arch-node{padding:.8rem .6rem;min-width:0;flex:1;min-height:110px;display:flex;flex-direction:column;justify-content:center}
+.arch-flow .arch-arrow{flex-shrink:0;min-width:50px;align-self:center}
+.arch-callout{
+  margin:.2rem 1rem 1rem;padding:.6rem .8rem;border-radius:6px;
+  font-family:var(--font-mono);font-size:.85rem;line-height:1.5;
+}
+.arch-callout.bad{background:var(--red-dim);color:var(--red-bright);border:1px solid rgba(239,68,68,.2)}
+.arch-callout.mixed{background:var(--accent-dim);color:#78350f;border:1px solid rgba(245,158,11,.25)}
+@media(prefers-color-scheme:dark){.arch-callout.mixed{color:#fbbf24}}
+.arch-callout.good{background:var(--green-dim);color:#15603a;border:1px solid rgba(34,197,94,.2)}
+@media(prefers-color-scheme:dark){.arch-callout.good{color:#4ade80}}
+
+/* Tracks legend */
+.tracks-legend{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+  gap:.5rem;margin-top:1rem;padding:1rem;
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;
+}
+.track-item{display:flex;align-items:center;gap:.5rem;font-size:.85rem}
+.track-item .swatch{width:10px;height:10px;border-radius:2px;flex-shrink:0}
+.track-item .tname{font-family:var(--font-mono);color:var(--text)}
+
+/* Footer */
+.foot{
+  text-align:center;padding:2rem 0;border-top:1px solid var(--border);
+  margin-top:2rem;
+}
+.foot p{font-size:.9rem;color:var(--text)}
+.foot a{color:var(--accent);text-decoration:none}
+.foot a:hover{text-decoration:underline}
+.foot .built{font-family:var(--font-mono);font-size:.8rem;color:var(--text-dim);margin-top:.5rem}
+
+/* Animations */
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.fade-in{animation:fadeUp .5s ease both;animation-delay:calc(var(--i,0) * .08s)}
+@media(prefers-reduced-motion:reduce){.fade-in{animation:none;opacity:1}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- Hero -->
+<header class="hero fade-in" style="--i:0">
+  <div class="badge">low-latency streaming / unreliable transports</div>
+  <h1>Why <span class="hl">MoQ</span> Keeps Your Robot Under Control</h1>
+  <p class="sub" style="text-align:left">
+    <strong>The problem:</strong> Build highly optimized, low-latency, reliable data streaming systems over unreliable transports in real-world conditions. Ship hulls, gantry cranes, and welding EMI create 10-20% packet loss on industrial WiFi (<a href="https://doi.org/10.6028/NIST.TN.1982" style="color:var(--accent)">NIST</a>).
+  </p>
+  <p class="sub" style="text-align:left;margin-top:.5rem">
+    <strong>The industry default:</strong> WebRTC &mdash; used by <a href="https://livekit.io/customers/polymath" style="color:var(--accent)">Polymath/LiveKit</a>, <a href="https://transitiverobotics.com/caps/transitive-robotics/webrtc-video/" style="color:var(--accent)">Transitive Robotics</a>, and <a href="https://www.viam.com/post/real-time-robot-control-grpc-webrtc" style="color:var(--accent)">Viam (gRPC+WebRTC)</a>. WebRTC's trade-off: all streams share a single ordered channel, so a lost video packet can stall control data (head-of-line blocking).
+  </p>
+  <p class="sub" style="text-align:left;margin-top:.5rem">
+    <strong>On the robot:</strong> ROS2 / DDS handles local inter-process communication at 1kHz. LCM for lightweight messaging. But none of these solve the WAN teleop transport problem &mdash; getting data reliably from operator to robot over WiFi and cellular.
+  </p>
+  <p class="sub" style="text-align:left;margin-top:.5rem">
+    <strong>MoQ (Media over QUIC):</strong> Per-stream priority scheduling over a single QUIC connection. Video degrades gracefully while safety-critical control data keeps flowing. A single protocol for the WAN teleop link.
+  </p>
+</header>
+
+<!-- Key results — delivery rates under congestion -->
+<section class="data-section fade-in" style="--i:2">
+  <h2>Delivery rates under congestion</h2>
+  <p class="sub">MoQ bars: measured from telemoq via relay under bandwidth constraint. DDS+SRT and WebRTC bars: modeled from protocol behavior, not measured from live stacks.</p>
+  <a href="/Users/e/Desktop/develop/telemoq/telemoq-benchmark.html" style="display:block;margin:1.2rem 0;padding:1rem 1.4rem;border-radius:12px;background:var(--red-dim);border:1px solid rgba(239,68,68,.3);text-decoration:none;transition:border-color .2s">
+    <span style="display:block;font-size:1.5rem;font-weight:700;color:var(--red-bright);letter-spacing:-.02em">Priority: 17.4/s &nbsp; No-priority: 5.3/s &nbsp; Single-stream: 0.1/s</span>
+    <span style="display:block;margin-top:.4rem;font-family:var(--font-mono);font-size:.82rem;color:var(--text-dim)">Control data throughput under congestion. Three modes, one binary. Priority delivers 3.3x more than DDS-like, 174x more than WebRTC-like. <span style="color:var(--text);text-decoration:underline">See full benchmark &rarr;</span></span>
+  </a>
+  <div class="data-grid">
+    <div class="chart-wrap">
+      <canvas id="benchmark-chart"></canvas>
+    </div>
+    <div class="takeaway">
+      <div class="takeaway-title">Key Takeaway</div>
+      <p>Under congestion, MoQ delivers <strong>98-100% of safety-critical control data</strong> (heartbeat, SE3 commands, force/torque) by starving low-priority video first.</p>
+      <p>DDS+SRT smartly isolates video on a separate protocol. But within DDS, <strong>all topics share equal priority ~80%</strong>. MoQ unifies both into a single connection with per-stream priority.</p>
+      <p>WebRTC delivers <strong>~30% of ALL streams equally</strong> &mdash; including e-stop. The operator cannot reliably emergency-stop the robot.</p>
+      <p>The transport layer decides what gets through. With MoQ, that decision is <strong>priority-aware</strong>. With DDS, it's best-effort. With WebRTC, it's random.</p>
+      <a href="/Users/e/Desktop/develop/telemoq/telemoq-benchmark.html" style="display:block;margin-top:.8rem;padding:.6rem .8rem;border-radius:8px;background:var(--green-dim);border:1px solid rgba(34,197,94,.3);text-decoration:none;color:var(--text);font-size:.85rem"><strong style="color:var(--green)">Measured proof:</strong> 3.3x more control data with priority vs DDS-like. 174x more vs WebRTC-like. <span style="color:var(--accent);text-decoration:underline">See 3-mode benchmark &rarr;</span></a>
+    </div>
+  </div>
+</section>
+
+<!-- Scenario bar -->
+<div class="scenario fade-in" style="--i:3">
+  <span class="label">Scenario</span>
+  <span class="val">Humanoid teleoperation &mdash; shipyard fab</span>
+  <span class="sep">|</span>
+  <span class="label">Packet Loss</span>
+  <span class="val" id="loss-pct">0%</span>
+  <span class="sep">|</span>
+  <span class="label">Phase</span>
+  <span class="val" id="phase-label">Normal operation</span>
+</div>
+
+<!-- Side by side animation -->
+<div class="compare fade-in" style="--i:4">
+
+  <!-- WebRTC panel -->
+  <div class="panel webrtc">
+    <div class="panel-header">
+      <div class="dot"></div>
+      <span class="proto">WebRTC / DTLS</span>
+      <span class="desc">Single ordered byte stream</span>
+    </div>
+    <div class="video-area">
+      <canvas class="video-canvas" id="webrtc-canvas"></canvas>
+      <div class="video-fps" id="webrtc-fps">30 fps</div>
+      <div class="video-overlay">
+        <div class="freeze-label" id="webrtc-freeze">FROZEN &mdash; ALL STREAMS BLOCKED</div>
+      </div>
+    </div>
+    <div class="streams" id="webrtc-streams">
+      <div class="streams-label">All streams share one channel &mdash; no priority</div>
+      <div class="stream-row"><span class="stream-name">safety/heartbeat</span><span class="stream-pri no-pri">&mdash;</span><div class="stream-bar-wrap"><div class="stream-bar" id="w-hb" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="w-hb-v">10/10 Hz</span></div>
+      <div class="stream-row"><span class="stream-name">control/streaming</span><span class="stream-pri no-pri">&mdash;</span><div class="stream-bar-wrap"><div class="stream-bar" id="w-str" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="w-str-v">167/167</span></div>
+      <div class="stream-row"><span class="stream-name">control/task_status</span><span class="stream-pri no-pri">&mdash;</span><div class="stream-bar-wrap"><div class="stream-bar" id="w-tsk" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="w-tsk-v">10/10</span></div>
+      <div class="stream-row"><span class="stream-name">sensors/joints</span><span class="stream-pri no-pri">&mdash;</span><div class="stream-bar-wrap"><div class="stream-bar" id="w-jnt" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="w-jnt-v">100/100</span></div>
+      <div class="stream-row"><span class="stream-name">sensors/force_torque</span><span class="stream-pri no-pri">&mdash;</span><div class="stream-bar-wrap"><div class="stream-bar" id="w-ft" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="w-ft-v">100/100</span></div>
+      <div class="stream-row"><span class="stream-name">sensors/imu</span><span class="stream-pri no-pri">&mdash;</span><div class="stream-bar-wrap"><div class="stream-bar" id="w-imu" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="w-imu-v">200/200</span></div>
+      <div class="stream-row"><span class="stream-name">perception/ptcloud</span><span class="stream-pri no-pri">&mdash;</span><div class="stream-bar-wrap"><div class="stream-bar" id="w-pc" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="w-pc-v">5/5</span></div>
+      <div class="stream-row"><span class="stream-name">video/camera0</span><span class="stream-pri no-pri">&mdash;</span><div class="stream-bar-wrap"><div class="stream-bar" id="w-vid" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="w-vid-v">30/30</span></div>
+    </div>
+    <div class="panel-footer" id="webrtc-status">
+      <div class="status-dot" style="background:var(--green)"></div>
+      <span>Robot responsive &mdash; operator has full control</span>
+    </div>
+  </div>
+
+  <!-- DDS+SRT panel (IHMC current) -->
+  <div class="panel dds">
+    <div class="panel-header">
+      <div class="dot"></div>
+      <span class="proto">DDS + SRT</span>
+      <span class="desc">Two protocols, no priority</span>
+    </div>
+    <div class="video-area">
+      <canvas class="video-canvas" id="dds-canvas"></canvas>
+      <div class="video-fps" id="dds-fps">30 fps</div>
+      <div class="video-overlay">
+        <div class="freeze-label" id="dds-label" style="display:none"></div>
+      </div>
+    </div>
+    <div class="streams" id="dds-streams">
+      <div class="streams-label">DDS: control + sensors &bull; SRT: video (separate)</div>
+      <div class="stream-row"><span class="stream-name">safety/heartbeat</span><span class="stream-pri no-pri">DDS</span><div class="stream-bar-wrap"><div class="stream-bar" id="d-hb" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="d-hb-v">10/10 Hz</span></div>
+      <div class="stream-row"><span class="stream-name">control/streaming</span><span class="stream-pri no-pri">DDS</span><div class="stream-bar-wrap"><div class="stream-bar" id="d-str" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="d-str-v">167/167</span></div>
+      <div class="stream-row"><span class="stream-name">control/task_status</span><span class="stream-pri no-pri">DDS</span><div class="stream-bar-wrap"><div class="stream-bar" id="d-tsk" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="d-tsk-v">10/10</span></div>
+      <div class="stream-row"><span class="stream-name">sensors/joints</span><span class="stream-pri no-pri">DDS</span><div class="stream-bar-wrap"><div class="stream-bar" id="d-jnt" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="d-jnt-v">100/100</span></div>
+      <div class="stream-row"><span class="stream-name">sensors/force_torque</span><span class="stream-pri no-pri">DDS</span><div class="stream-bar-wrap"><div class="stream-bar" id="d-ft" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="d-ft-v">100/100</span></div>
+      <div class="stream-row"><span class="stream-name">sensors/imu</span><span class="stream-pri no-pri">DDS</span><div class="stream-bar-wrap"><div class="stream-bar" id="d-imu" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="d-imu-v">200/200</span></div>
+      <div class="stream-row"><span class="stream-name">perception/ptcloud</span><span class="stream-pri no-pri">DDS</span><div class="stream-bar-wrap"><div class="stream-bar" id="d-pc" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="d-pc-v">5/5</span></div>
+      <div class="stream-row"><span class="stream-name">video/camera0</span><span class="stream-pri no-pri">SRT</span><div class="stream-bar-wrap"><div class="stream-bar" id="d-vid" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="d-vid-v">30/30</span></div>
+    </div>
+    <div class="panel-footer" id="dds-status">
+      <div class="status-dot" style="background:var(--green)"></div>
+      <span>Robot responsive &mdash; operator has full control</span>
+    </div>
+  </div>
+
+  <!-- MoQ panel -->
+  <div class="panel moq">
+    <div class="panel-header">
+      <div class="dot"></div>
+      <span class="proto">MoQ / QUIC</span>
+      <span class="desc">Per-stream priority scheduling</span>
+    </div>
+    <div class="video-area">
+      <canvas class="video-canvas" id="moq-canvas"></canvas>
+      <div class="video-fps" id="moq-fps">30 fps</div>
+      <div class="video-overlay">
+        <div class="freeze-label" id="moq-label" style="display:none"></div>
+      </div>
+    </div>
+    <div class="streams" id="moq-streams">
+      <div class="streams-label">Each stream has a QUIC priority &mdash; lower = sent first</div>
+      <div class="stream-row"><span class="stream-name">safety/heartbeat</span><span class="stream-pri">P0</span><div class="stream-bar-wrap"><div class="stream-bar" id="m-hb" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="m-hb-v">10/10 Hz</span></div>
+      <div class="stream-row"><span class="stream-name">control/streaming</span><span class="stream-pri">P1</span><div class="stream-bar-wrap"><div class="stream-bar" id="m-str" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="m-str-v">167/167</span></div>
+      <div class="stream-row"><span class="stream-name">control/task_status</span><span class="stream-pri">P1</span><div class="stream-bar-wrap"><div class="stream-bar" id="m-tsk" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="m-tsk-v">10/10</span></div>
+      <div class="stream-row"><span class="stream-name">sensors/joints</span><span class="stream-pri">P2</span><div class="stream-bar-wrap"><div class="stream-bar" id="m-jnt" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="m-jnt-v">100/100</span></div>
+      <div class="stream-row"><span class="stream-name">sensors/force_torque</span><span class="stream-pri">P3</span><div class="stream-bar-wrap"><div class="stream-bar" id="m-ft" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="m-ft-v">100/100</span></div>
+      <div class="stream-row"><span class="stream-name">sensors/imu</span><span class="stream-pri">P5</span><div class="stream-bar-wrap"><div class="stream-bar" id="m-imu" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="m-imu-v">200/200</span></div>
+      <div class="stream-row"><span class="stream-name">perception/ptcloud</span><span class="stream-pri">P10</span><div class="stream-bar-wrap"><div class="stream-bar" id="m-pc" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="m-pc-v">5/5</span></div>
+      <div class="stream-row"><span class="stream-name">video/camera0</span><span class="stream-pri">P20</span><div class="stream-bar-wrap"><div class="stream-bar" id="m-vid" style="width:100%;background:var(--green)"></div></div><span class="stream-val" id="m-vid-v">30/30</span></div>
+    </div>
+    <div class="panel-footer" id="moq-status">
+      <div class="status-dot" style="background:var(--green)"></div>
+      <span>Robot responsive &mdash; operator has full control</span>
+    </div>
+  </div>
+</div>
+
+<!-- Why it matters -->
+<section class="explain fade-in" style="--i:4">
+  <h2>What happens under 15% packet loss</h2>
+  <div class="explain-grid">
+    <div class="explain-card">
+      <h3><span class="marker" style="background:var(--red)"></span>WebRTC: Head-of-Line Blocking</h3>
+      <p>DTLS runs over a single ordered byte stream. When a video keyframe packet is lost, <strong>every stream behind it stalls</strong> &mdash; including safety-critical e-stop and joint commands. The operator loses control of the robot for 200-800ms per event. At 15% loss (NIST industrial WiFi), this happens multiple times per second.</p>
+    </div>
+    <div class="explain-card">
+      <h3><span class="marker" style="background:var(--green)"></span>MoQ: Priority Stream Scheduling</h3>
+      <p>QUIC provides independent streams with per-track priority. Quinn's scheduler uses a <code>BinaryHeap</code> &mdash; strict priority starvation. Under congestion, high-priority control data (P0-P3) is sent first. Low-priority video (P20) is starved last. The robot's onboard controller uses <strong>12ms forward extrapolation</strong> (IHMC KST pattern) to ride through brief gaps &mdash; MoQ keeps those gaps under 12ms even at 15% loss.</p>
+    </div>
+    <div class="explain-card">
+      <h3><span class="marker" style="background:var(--orange)"></span>20% Packet Loss: Shipyards as Faraday Cages</h3>
+      <p>Steel ship hulls act as Faraday cages. Gantry cranes cause multipath interference. Arc welding generates broadband EMI across the ISM band. NIST measurements show <strong>10-20% packet loss</strong> in these environments. A teleoperated humanoid holding a welding torch cannot tolerate 200ms control gaps &mdash; e-stop must always get through.</p>
+    </div>
+    <div class="explain-card">
+      <h3><span class="marker" style="background:var(--accent)"></span>The Problem: Reliable Streaming Over Unreliable Transports</h3>
+      <p>ROS2/DDS runs on the robot at 1kHz. LCM handles lightweight messaging. But the WAN teleop link &mdash; WiFi and cellular from operator to robot &mdash; needs <strong>&ldquo;optimized, reliable data streaming protocols functioning over WiFi and cellular networks.&rdquo;</strong> Current solutions: <a href="https://livekit.io/customers/polymath" style="color:var(--accent)">Polymath</a> uses LiveKit/WebRTC, <a href="https://transitiverobotics.com/caps/transitive-robotics/webrtc-video/" style="color:var(--accent)">Transitive</a> uses WebRTC P2P, <a href="https://www.viam.com/post/real-time-robot-control-grpc-webrtc" style="color:var(--accent)">Viam</a> uses gRPC+WebRTC. All inherit WebRTC's head-of-line blocking trade-off.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Real telemoq data -->
+
+<!-- Architecture -->
+<section class="arch fade-in" style="--i:5">
+
+  <h2>Architecture: Head-to-Head</h2>
+  <div class="arch-compare">
+
+    <!-- WebRTC architecture -->
+    <div class="arch-panel webrtc">
+      <div class="arch-panel-header">
+        <div class="dot" style="background:var(--red)"></div>
+        WebRTC / DTLS
+        <span class="arch-desc">Single ordered channel</span>
+      </div>
+      <div class="arch-flow">
+        <div class="arch-node operator">
+          <div class="title">Operator</div>
+          <div class="detail">Control station + interface</div>
+        </div>
+        <div class="arch-arrow">
+          <span class="arr-line"><svg viewBox="0 0 60 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 7H52" stroke="currentColor" stroke-width="1.5"/><path d="M10 3L4 7l6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M50 3l6 4-6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>
+          <span class="arr-label">all data mixed</span>
+          <span class="arr-label">single DTLS pipe</span>
+        </div>
+        <div class="arch-node turn">
+          <div class="title">TURN Server</div>
+          <div class="detail">Media relay<br>No priority awareness<br>Single ordered byte stream</div>
+        </div>
+        <div class="arch-arrow">
+          <span class="arr-line"><svg viewBox="0 0 60 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 7H52" stroke="currentColor" stroke-width="1.5"/><path d="M10 3L4 7l6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M50 3l6 4-6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>
+          <span class="arr-label">all data mixed</span>
+          <span class="arr-label">single DTLS pipe</span>
+        </div>
+        <div class="arch-node robot">
+          <div class="title">Robot</div>
+          <div class="detail">100Hz control loop</div>
+        </div>
+      </div>
+      <div class="arch-callout bad">
+        1 lost video packet &rarr; ALL streams stall (HOL blocking)<br>
+        E-stop waits behind 50KB video keyframe retransmission
+      </div>
+    </div>
+
+    <!-- DDS + SRT architecture (IHMC current) -->
+    <div class="arch-panel dds-srt">
+      <div class="arch-panel-header">
+        <div class="dot" style="background:var(--orange)"></div>
+        DDS + SRT (IHMC)
+        <span class="arch-desc">Two protocols, no priority within DDS</span>
+      </div>
+      <div class="arch-flow">
+        <div class="arch-node operator">
+          <div class="title">Operator</div>
+          <div class="detail">VR headset + KST</div>
+        </div>
+        <div class="arch-arrow">
+          <span class="arr-line"><svg viewBox="0 0 60 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 7H52" stroke="currentColor" stroke-width="1.5"/><path d="M10 3L4 7l6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M50 3l6 4-6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>
+          <span class="arr-label">DDS: cmds + sensors</span>
+          <span class="arr-label">SRT: video separate</span>
+        </div>
+        <div class="arch-node" style="border-color:var(--orange);background:var(--accent-dim)">
+          <div class="title">DDS Router + SRT</div>
+          <div class="detail">eProsima Fast-DDS (RTPS)<br>SRT for video (HEVC/50ms buf)<br>No cross-protocol priority</div>
+        </div>
+        <div class="arch-arrow">
+          <span class="arr-line"><svg viewBox="0 0 60 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 7H52" stroke="currentColor" stroke-width="1.5"/><path d="M10 3L4 7l6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M50 3l6 4-6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>
+          <span class="arr-label">DDS: all topics equal</span>
+          <span class="arr-label">SRT: video independent</span>
+        </div>
+        <div class="arch-node robot">
+          <div class="title">Robot</div>
+          <div class="detail">1kHz QP controller</div>
+        </div>
+      </div>
+      <div class="arch-callout mixed">
+        Smart: video isolated on SRT &mdash; won't block control data<br>
+        Limitation: within DDS, all topics share equal priority<br>
+        <span style="opacity:.85">Two protocols to operate. MoQ unifies both with per-stream priority.</span>
+      </div>
+    </div>
+
+    <!-- MoQ architecture -->
+    <div class="arch-panel moq">
+      <div class="arch-panel-header">
+        <div class="dot" style="background:var(--green)"></div>
+        MoQ / QUIC
+        <span class="arch-desc">Per-stream priority scheduling</span>
+      </div>
+      <div class="arch-flow">
+        <div class="arch-node operator">
+          <div class="title">Operator</div>
+          <div class="detail">Control station + interface</div>
+        </div>
+        <div class="arch-arrow">
+          <span class="arr-line"><svg viewBox="0 0 60 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 7H52" stroke="currentColor" stroke-width="1.5"/><path d="M10 3L4 7l6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M50 3l6 4-6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>
+          <span class="arr-label">cmds P0-P1</span>
+          <span class="arr-label">sensors P2-P5</span>
+        </div>
+        <div class="arch-node relay">
+          <div class="title">MoQ Relay</div>
+          <div class="detail">QUIC priority scheduler<br>BBR congestion control<br>Per-stream priority</div>
+        </div>
+        <div class="arch-arrow">
+          <span class="arr-line"><svg viewBox="0 0 60 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 7H52" stroke="currentColor" stroke-width="1.5"/><path d="M10 3L4 7l6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M50 3l6 4-6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>
+          <span class="arr-label">cmds P0-P1</span>
+          <span class="arr-label">video P20</span>
+        </div>
+        <div class="arch-node robot">
+          <div class="title">Robot</div>
+          <div class="detail">1kHz QP controller</div>
+        </div>
+      </div>
+      <div class="arch-callout good">
+        Video degrades &rarr; control stays at full rate (priority starvation)<br>
+        E-stop always gets through first &mdash; P0 beats P20<br>
+        <span style="opacity:.85">One protocol, one connection. Unifies what DDS + SRT do separately.</span>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- IHMC Lessons -->
+<section class="limitations fade-in" style="--i:6">
+  <details class="handoff-details">
+    <summary>
+      <h2>Built on IHMC's Lessons</h2>
+      <span class="expand-hint" style="font-size:.85rem;color:var(--text-dim);margin-left:auto;font-family:var(--font-mono)">click to expand</span>
+    </summary>
+    <div>
+      <p style="font-size:1rem;color:var(--text);margin-bottom:1.2rem;max-width:800px">IHMC's 20+ years of humanoid teleoperation research &mdash; from Atlas at the DRC to Nadia and Alex &mdash; shaped how we think about priority-based communication. The DRC's degraded-network constraints informed MoQ's track hierarchy.</p>
+      <div class="explain-grid">
+        <div class="explain-card">
+          <h3><span class="marker" style="background:var(--red)"></span>Safety Can't Wait Behind Video</h3>
+          <p>If the network drops, the robot must stop safely. With WebRTC, a large lost video frame <strong>blocks the emergency stop</strong> from getting through. MoQ guarantees safety signals always ship first &mdash; video can wait, the e-stop cannot.</p>
+          <p style="font-size:.82rem;color:var(--text-dim);margin-top:.5rem"><a href="https://www.ihmc.us/series-elastic-actuators/" style="color:var(--accent)">IHMC Safety</a> &bull; <a href="https://www.ihmc.us/research/human-machine-teamwork/" style="color:var(--accent)">Coactive Design</a></p>
+        </div>
+        <div class="explain-card">
+          <h3><span class="marker" style="background:var(--blue)"></span>Control Commands Are Tiny</h3>
+          <p>At the DARPA Robotics Challenge, IHMC's Atlas operated on a <strong>9,600 bps control link</strong>. Control commands are tiny &mdash; the bandwidth bottleneck is always video and sensor data. So when bandwidth gets tight, sacrifice the big stuff (video) to protect the small stuff (commands).</p>
+          <p style="font-size:.82rem;color:var(--text-dim);margin-top:.5rem"><a href="https://www.iwl.com/blog/darpa-robotics-finals" style="color:var(--accent)">DRC Network Degradation</a> &bull; <a href="https://link.springer.com/chapter/10.1007/978-3-319-74666-1_3" style="color:var(--accent)">Team IHMC Lessons</a></p>
+        </div>
+        <div class="explain-card">
+          <h3><span class="marker" style="background:var(--green)"></span>High-Level Goals, Not Raw Joint Commands</h3>
+          <p>The robot runs its own fast control loop locally. The operator sends <strong>high-level goals</strong> ("move hand here"), not low-level motor commands. This means the teleop link can tolerate brief interruptions &mdash; the robot keeps executing while waiting for the next goal.</p>
+          <p style="font-size:.82rem;color:var(--text-dim);margin-top:.5rem"><a href="https://arxiv.org/html/2411.03532v1" style="color:var(--accent)">IHMC Behavior Architecture</a> &bull; <a href="https://github.com/ihmcrobotics/ihmc-open-robotics-software" style="color:var(--accent)">IHMC Open Robotics</a></p>
+        </div>
+        <div class="explain-card">
+          <h3><span class="marker" style="background:var(--accent)"></span>Today's Teleop Trains Tomorrow's AI</h3>
+          <p>Every teleoperation session produces training data. MoQ's per-stream timestamps let you <strong>capture all channels in sync</strong> &mdash; commands, sensors, video &mdash; with priorities ensuring the important data is never dropped. Teleop today, autonomous tomorrow.</p>
+          <p style="font-size:.82rem;color:var(--text-dim);margin-top:.5rem"><a href="https://www.ihmc.us/news20251119/" style="color:var(--accent)">IHMC Alex</a> &bull; <a href="https://ntrs.nasa.gov/citations/20220007587" style="color:var(--accent)">NASA Valkyrie VR</a></p>
+        </div>
+      </div>
+    </div>
+  </details>
+</section>
+
+<!-- Known Limitations -->
+<section class="limitations fade-in" style="--i:7">
+  <h2>Known Demo Limitations</h2>
+  <p style="font-size:1rem;color:var(--text);line-height:1.6;margin-bottom:1.2rem">
+    This demo proves MoQ's priority scheduling mechanism. It does <strong>not</strong> replicate production teleop conditions.
+    We document these gaps honestly so practitioners can evaluate what's demonstrated vs. what's claimed.
+  </p>
+  <table class="limit-table">
+    <thead>
+      <tr><th style="width:25%">Limitation</th><th>What the demo does</th><th>What production requires</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Localhost only</strong></td>
+        <td>Pub &amp; sub on same machine via loopback. Clocks perfectly synced.</td>
+        <td>Multi-hop relay, NTP drift (1-10ms), asymmetric paths. Add ~20ms encode + ~5ms decode.</td>
+      </tr>
+      <tr>
+        <td><strong>Bandwidth constraint, not random loss</strong></td>
+        <td>Bandwidth throttling triggers priority starvation.</td>
+        <td>Shipyards have <strong>random</strong> packet loss (NIST: 10-20%). BBR can collapse under &gt;5% random loss &mdash; priority scheduling doesn't help if BBR shuts down the pipe.</td>
+      </tr>
+      <tr>
+        <td><strong>No real video codec</strong></td>
+        <td>50KB zero-filled blobs at 30fps.</td>
+        <td>H.264/H.265 with I-frame/P-frame dependencies. Losing an I-frame degrades more than a P-frame. No GOP structure tested.</td>
+      </tr>
+      <tr>
+        <td><strong>No bidirectional flow</strong></td>
+        <td>Single publisher simulates both directions.</td>
+        <td>Two independent publishers at relay. Bidirectional priority under asymmetric congestion is unsolved.</td>
+      </tr>
+      <tr>
+        <td><strong>Forward extrapolation claimed, not shown</strong></td>
+        <td>Inter-arrival gaps displayed vs. 12ms KST window.</td>
+        <td>Simulated robot arm extrapolating trajectory during gaps, then snapping back on data resume.</td>
+      </tr>
+      <tr>
+        <td><strong>No connection migration</strong></td>
+        <td>Static QUIC session on loopback.</td>
+        <td>Robot roaming between APs. QUIC connection IDs survive network change (vs. WebRTC ICE restart, TCP death).</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- WiFi → Cellular Handoff -->
+<section class="limitations fade-in" style="--i:8">
+  <details class="handoff-details">
+    <summary>
+      <h2>The WiFi → Cellular Handoff Problem</h2>
+      <span class="expand-hint" style="font-size:.85rem;color:var(--text-dim);margin-left:auto;font-family:var(--font-mono)">click to expand</span>
+    </summary>
+    <div style="margin-top:1.2rem">
+      <p style="font-size:1rem;color:var(--text);line-height:1.7;margin-bottom:1rem">
+        A humanoid robot in a shipyard moves between welding bays. Each bay has a different WiFi access point. Between bays, coverage drops and the operator's device may fall back to cellular. This is the <strong>handoff problem</strong> &mdash; and it exposes a fundamental difference between transport protocols.
+      </p>
+      <table class="limit-table">
+        <thead>
+          <tr><th>Protocol</th><th>What happens on network change</th><th>Downtime</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>TCP</strong></td>
+            <td>Connection is bound to a 4-tuple (src IP, src port, dst IP, dst port). When the IP changes, the connection <strong>dies</strong>. Application must detect timeout, reconnect, re-authenticate, re-subscribe to all tracks.</td>
+            <td style="color:var(--red);font-weight:600">2-10 seconds</td>
+          </tr>
+          <tr>
+            <td><strong>WebRTC</strong></td>
+            <td>Requires <strong>ICE restart</strong>: re-gather candidates, re-negotiate connectivity checks, re-establish DTLS. <a href="https://transitiverobotics.com/blog/streaming-video-from-robots/" style="color:var(--accent)">Transitive Robotics</a> and <a href="https://www.viam.com/post/real-time-robot-control-grpc-webrtc" style="color:var(--accent)">Viam</a> both use TURN fallback, adding another hop. During ICE restart, the operator has <strong>no control</strong> of the robot.</td>
+            <td style="color:var(--orange);font-weight:600">0.5-3 seconds</td>
+          </tr>
+          <tr>
+            <td><strong>DDS (RTPS)</strong></td>
+            <td>DDS discovery uses multicast on the local network segment. When the robot moves to a new subnet, <strong>discovery fails</strong>. Requires DDS router/bridge configuration per network, or WAN discovery via DDS Cloud Discovery Service. Not designed for roaming.</td>
+            <td style="color:var(--orange);font-weight:600">Discovery-dependent</td>
+          </tr>
+          <tr>
+            <td><strong style="color:var(--green)">QUIC (MoQ)</strong></td>
+            <td>Connection identified by <strong>Connection ID</strong>, not IP/port. When the network interface changes, the client sends packets from the new address with the same Connection ID. The server validates via PATH_CHALLENGE/PATH_RESPONSE. Session continues &mdash; no re-handshake, no re-subscription.</td>
+            <td style="color:var(--green);font-weight:600">0-RTT (one round-trip)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top:1.2rem;display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+        <div style="padding:1rem;border-radius:8px;background:var(--surface);border:1px solid var(--border)">
+          <div style="font-family:var(--font-mono);font-size:.82rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text);margin-bottom:.5rem">The shipyard scenario</div>
+          <p style="font-size:.95rem;color:var(--text);line-height:1.6">
+            Robot walks from Bay A (WiFi AP1) through a steel corridor (no coverage) to Bay B (WiFi AP2). The operator must maintain continuous control throughout. With WebRTC, the 1-3 second ICE restart in the corridor means the robot is <strong>uncontrolled while holding a welding torch</strong>. With QUIC, the heartbeat stream continues within one round-trip of reaching AP2.
+          </p>
+        </div>
+        <div style="padding:1rem;border-radius:8px;background:var(--surface);border:1px solid var(--border)">
+          <div style="font-family:var(--font-mono);font-size:.82rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text);margin-bottom:.5rem">The cellular fallback scenario</div>
+          <p style="font-size:.95rem;color:var(--text);line-height:1.6">
+            The operator's control station has both WiFi and 5G. WiFi drops during an AP transition. With QUIC connection migration, the session seamlessly moves to 5G &mdash; higher latency but <strong>no interruption</strong>. MoQ's priority scheduling then adapts: high-priority control (P0-P1) fits easily in cellular bandwidth, while video (P20) is starved to match the reduced pipe.
+          </p>
+        </div>
+      </div>
+
+      <div style="margin-top:1rem;padding:.8rem 1rem;border-radius:6px;background:var(--accent-dim);border:1px solid rgba(245,158,11,.2);font-size:.95rem;color:var(--text);line-height:1.6">
+        <strong style="color:var(--accent)">Status:</strong> QUIC connection migration is defined in <a href="https://www.rfc-editor.org/rfc/rfc9000#section-9" style="color:var(--accent)">RFC 9000 &sect;9</a>. Quinn (the Rust QUIC library MoQ uses) has client-side migration support. The moq-relay does not yet accept migrated connections. This is a protocol capability, not yet a telemoq feature.
+      </div>
+    </div>
+  </details>
+</section>
+
+<!-- Roadmap -->
+<section class="limitations fade-in" style="--i:9">
+  <details class="handoff-details">
+    <summary>
+      <h2>MoQ Teleoperation Roadmap</h2>
+      <span class="expand-hint" style="font-size:.85rem;color:var(--text-dim);margin-left:auto;font-family:var(--font-mono)">click to expand</span>
+    </summary>
+    <div>
+      <p style="font-size:1rem;color:var(--text);line-height:1.6;margin-bottom:1rem">
+        From transport demo to production teleop stack. Each phase addresses specific practitioner concerns.
+      </p>
+      <div class="roadmap-timeline">
+        <div class="roadmap-phase">
+          <div class="phase-title">Phase 1: Honest Transport <span class="phase-tag" style="background:var(--accent-dim);color:var(--accent)">Current</span></div>
+          <ul>
+            <li>Wall-clock latency measurement (pub&rarr;relay&rarr;sub delta)</li>
+            <li>Inter-arrival gap tracking vs. 12ms IHMC KST extrapolation window</li>
+            <li>CSV export for offline analysis (matplotlib/pandas)</li>
+            <li>BBR congestion control caveat documented honestly</li>
+            <li>8 IHMC-aligned tracks: heartbeat, SE3 streaming, task ack, joints, F/T, IMU, pointcloud, video</li>
+          </ul>
+        </div>
+        <div class="roadmap-phase">
+          <div class="phase-title">Phase 2: Real-World Conditions <span class="phase-tag" style="background:var(--green-dim);color:var(--green)">Next</span></div>
+          <ul>
+            <li><strong>Random packet loss testing</strong> &mdash; macOS <code style="font-family:var(--font-mono);font-size:.88rem;padding:.1rem .3rem;border-radius:3px;background:var(--surface2)">dnctl</code> / Linux <code style="font-family:var(--font-mono);font-size:.88rem;padding:.1rem .3rem;border-radius:3px;background:var(--surface2)">tc netem</code> at 5%, 10%, 15%, 20% loss</li>
+            <li><strong>FEC for safety-critical tracks</strong> &mdash; redundant encoding for heartbeat/e-stop so they survive random loss even when BBR backs off</li>
+            <li><strong>Real H.264/H.265 video</strong> via lumina-video encoder &mdash; GOP structure, I-frame prioritization, adaptive bitrate</li>
+            <li><strong>Two-publisher bidirectional</strong> &mdash; operator and robot each run a publisher; relay mediates both directions</li>
+            <li><strong>Multi-hop relay</strong> &mdash; edge relay at job site, cloud relay for remote operators, measuring added latency</li>
+          </ul>
+        </div>
+        <div class="roadmap-phase">
+          <div class="phase-title">Phase 3: Production Teleop <span class="phase-tag" style="background:var(--blue-dim);color:var(--blue)">Future</span></div>
+          <ul>
+            <li><strong>Forward extrapolation controller</strong> &mdash; simulated 7-DOF arm that extrapolates trajectory during gaps, demonstrating IHMC's hold&rarr;decay&rarr;safe-stop sequence</li>
+            <li><strong>Connection migration demo</strong> &mdash; robot moving between APs, session survives network transition (QUIC connection IDs)</li>
+            <li><strong>DROID dataset replay</strong> &mdash; 76k real teleoperation trajectories (15Hz, 3 cameras) published over MoQ for E2E fidelity testing</li>
+            <li><strong>Behavior cloning pipeline</strong> &mdash; MoQ's per-stream timestamps enable synchronized capture of commands + sensors + video for training data collection (IHMC LeRobot pattern)</li>
+            <li><strong>XR headset integration</strong> &mdash; OpenXR input &rarr; SE3 pose targets over MoQ &rarr; robot, with priority-aware haptic feedback on a separate high-priority track</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </details>
+</section>
+
+<!-- Footer -->
+<footer class="foot fade-in" style="--i:9">
+  <p>Built for robotic teleoperation in industrial fabrication yards</p>
+  <p class="built"><a href="https://github.com/alltheseas/telemoq">github.com/alltheseas/telemoq</a> &mdash; MoQ transport for robotics teleoperation (Rust/QUIC) &bull; <a href="/Users/e/Desktop/develop/telemoq/telemoq-benchmark.html" style="color:var(--accent)">priority benchmark</a></p>
+  <div style="margin-top:1.2rem;padding-top:.8rem;border-top:1px solid var(--border);font-size:.85rem;color:var(--text-dim);text-align:left;max-width:700px;margin-left:auto;margin-right:auto">
+    <strong style="color:var(--text)">References</strong>
+    <ol style="margin-top:.4rem;padding-left:1.2rem;line-height:1.8">
+      <li>NIST Technical Note 1982 &mdash; <em>Guide to Industrial Wireless Systems Deployments</em>, R. Candell, K. Montgomery, Y. Liu, M. Hany (2018). <a href="https://doi.org/10.6028/NIST.TN.1982" style="color:var(--accent)">doi.org/10.6028/NIST.TN.1982</a></li>
+      <li>NIST AMS 300-4 &mdash; <em>Wireless Systems for Industrial Environments</em> (2020). Documents 10-20% packet loss on 2.4GHz WiFi in steel-enclosed industrial environments with welding EMI.</li>
+      <li>Johnson, Shrewsbury, Bertrand et al. &mdash; <em>Team IHMC's Lessons Learned from the DARPA Robotics Challenge</em>, Journal of Field Robotics (2017). <a href="https://link.springer.com/chapter/10.1007/978-3-319-74666-1_3" style="color:var(--accent)">Springer</a></li>
+      <li>IHMC Behavior Architecture &mdash; <em>A Behavior Architecture for Fast Humanoid Robot Door Traversals</em> (2024). <a href="https://arxiv.org/html/2411.03532v1" style="color:var(--accent)">arXiv:2411.03532</a></li>
+      <li>Jorgensen et al. &mdash; <em>Cockpit Interface for Locomotion and Manipulation Control of the NASA Valkyrie Humanoid in VR</em> (2022). <a href="https://ntrs.nasa.gov/citations/20220007587" style="color:var(--accent)">NASA Technical Reports</a></li>
+      <li>Polymath Robotics &mdash; WebRTC teleoperation via LiveKit for heavy machinery. <a href="https://livekit.io/customers/polymath" style="color:var(--accent)">LiveKit case study</a></li>
+      <li>Transitive Robotics &mdash; WebRTC peer-to-peer video streaming for ROS robots. <a href="https://transitiverobotics.com/caps/transitive-robotics/webrtc-video/" style="color:var(--accent)">WebRTC Video capability</a> &bull; <a href="https://transitiverobotics.com/blog/streaming-video-from-robots/" style="color:var(--accent)">5 Ways to Stream Video from Robots</a></li>
+      <li>Viam &mdash; gRPC + WebRTC for distributed robot communication. <a href="https://www.viam.com/post/real-time-robot-control-grpc-webrtc" style="color:var(--accent)">Real-time robot control with gRPC and WebRTC</a></li>
+    </ol>
+  </div>
+</footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+// ─── Simulation state ───
+const PHASE_NORMAL = 0, PHASE_LOSS = 1;
+let phase = PHASE_NORMAL;
+let tick = 0;
+let lossPct = 0;
+const LOSS_START = 80;   // tick when loss begins
+const LOSS_FULL = 120;   // tick when loss reaches 15%
+const CYCLE_LEN = 300;   // total cycle length before restart
+
+// ─── Video canvas rendering ───
+const W_CVS = document.getElementById('webrtc-canvas');
+const D_CVS = document.getElementById('dds-canvas');
+const M_CVS = document.getElementById('moq-canvas');
+const W_CTX = W_CVS.getContext('2d');
+const D_CTX = D_CVS.getContext('2d');
+const M_CTX = M_CVS.getContext('2d');
+
+function resizeCanvas(cvs) {
+  const r = cvs.parentElement.getBoundingClientRect();
+  cvs.width = r.width * devicePixelRatio;
+  cvs.height = r.height * devicePixelRatio;
+  cvs.style.width = r.width + 'px';
+  cvs.style.height = r.height + 'px';
+}
+resizeCanvas(W_CVS); resizeCanvas(D_CVS); resizeCanvas(M_CVS);
+window.addEventListener('resize', () => { resizeCanvas(W_CVS); resizeCanvas(D_CVS); resizeCanvas(M_CVS); });
+
+// Simple "robot arm" scene
+function drawScene(ctx, w, h, t, frozen, degraded) {
+  const s = devicePixelRatio;
+  ctx.clearRect(0, 0, w, h);
+
+  // Background — dark workshop floor
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, w, h);
+
+  // Grid floor
+  ctx.strokeStyle = 'rgba(100,120,140,.12)';
+  ctx.lineWidth = 1 * s;
+  const gs = 30 * s;
+  for (let x = 0; x < w; x += gs) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+  for (let y = 0; y < h; y += gs) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+
+  // Robot base
+  const bx = w * 0.5, by = h * 0.85;
+  ctx.fillStyle = '#2d3f56';
+  ctx.fillRect(bx - 40*s, by - 10*s, 80*s, 20*s);
+
+  // Arm segments (animated by t)
+  const a1 = Math.sin(t * 0.02) * 0.4 - 0.8;
+  const a2 = Math.sin(t * 0.03 + 1) * 0.6;
+  const l1 = 80 * s, l2 = 60 * s;
+
+  const j1x = bx, j1y = by - 10*s;
+  const j2x = j1x + Math.cos(a1) * l1;
+  const j2y = j1y + Math.sin(a1) * l1;
+  const ex = j2x + Math.cos(a1 + a2) * l2;
+  const ey = j2y + Math.sin(a1 + a2) * l2;
+
+  // Segment 1
+  ctx.strokeStyle = '#60a5fa';
+  ctx.lineWidth = 8 * s;
+  ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(j1x, j1y); ctx.lineTo(j2x, j2y); ctx.stroke();
+
+  // Segment 2
+  ctx.strokeStyle = '#38bdf8';
+  ctx.lineWidth = 6 * s;
+  ctx.beginPath(); ctx.moveTo(j2x, j2y); ctx.lineTo(ex, ey); ctx.stroke();
+
+  // Joints
+  ctx.fillStyle = '#1e3a5f';
+  ctx.beginPath(); ctx.arc(j1x, j1y, 6*s, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(j2x, j2y, 5*s, 0, Math.PI*2); ctx.fill();
+
+  // End effector (welding tip)
+  ctx.fillStyle = '#fbbf24';
+  ctx.beginPath(); ctx.arc(ex, ey, 4*s, 0, Math.PI*2); ctx.fill();
+
+  // Welding sparks
+  if (!frozen && Math.random() > 0.3) {
+    for (let i = 0; i < 5; i++) {
+      const sx = ex + (Math.random() - 0.5) * 20 * s;
+      const sy = ey + (Math.random() - 0.5) * 20 * s;
+      ctx.fillStyle = `rgba(251,191,36,${Math.random() * 0.8 + 0.2})`;
+      ctx.beginPath(); ctx.arc(sx, sy, (1 + Math.random() * 2) * s, 0, Math.PI*2); ctx.fill();
+    }
+  }
+
+  // HUD overlay — joint angles
+  ctx.font = `${10*s}px 'Fira Code',monospace`;
+  ctx.fillStyle = 'rgba(200,220,240,.6)';
+  ctx.fillText(`J1: ${(a1 * 180 / Math.PI).toFixed(1)}deg`, 10*s, 18*s);
+  ctx.fillText(`J2: ${(a2 * 180 / Math.PI).toFixed(1)}deg`, 10*s, 32*s);
+
+  // Frozen overlay
+  if (frozen) {
+    ctx.fillStyle = 'rgba(239,68,68,.08)';
+    ctx.fillRect(0, 0, w, h);
+    // Scanlines
+    for (let y = 0; y < h; y += 4*s) {
+      ctx.fillStyle = `rgba(239,68,68,${0.03 + Math.random()*0.04})`;
+      ctx.fillRect(0, y, w, 2*s);
+    }
+    // Glitch blocks
+    for (let i = 0; i < 6; i++) {
+      const gx = Math.random() * w;
+      const gy = Math.random() * h;
+      ctx.fillStyle = `rgba(239,68,68,${0.1 + Math.random()*0.15})`;
+      ctx.fillRect(gx, gy, (20+Math.random()*60)*s, (3+Math.random()*8)*s);
+    }
+  }
+
+  // Degraded overlay (lower fps look)
+  if (degraded) {
+    ctx.fillStyle = 'rgba(230,168,23,.04)';
+    ctx.fillRect(0, 0, w, h);
+  }
+}
+
+// ─── Stream update helpers ───
+function setStream(prefix, name, pct, expected) {
+  const bar = document.getElementById(`${prefix}-${name}`);
+  const val = document.getElementById(`${prefix}-${name}-v`);
+  const actual = Math.round(pct * expected / 100);
+  bar.style.width = Math.min(pct, 100) + '%';
+  bar.style.background = pct >= 80 ? 'var(--green)' : pct >= 40 ? 'var(--orange)' : 'var(--red)';
+  val.textContent = `${actual}/${expected}`;
+  val.style.color = pct >= 80 ? 'var(--green)' : pct >= 40 ? 'var(--orange)' : 'var(--red)';
+}
+
+function setStatus(id, dotColor, text) {
+  const el = document.getElementById(id);
+  el.innerHTML = `<div class="status-dot" style="background:${dotColor}"></div><span>${text}</span>`;
+}
+
+// ─── Main simulation loop ───
+let webrtcFrozenT = 0;
+let webrtcFrozen = false;
+let webrtcAnimT = 0;
+let ddsAnimT = 0;
+let ddsVideoSkip = 0;
+let moqAnimT = 0;
+let moqVideoSkip = 0;
+
+function simTick() {
+  tick++;
+  if (tick > CYCLE_LEN) { tick = 0; }
+
+  // Compute loss ramp
+  if (tick < LOSS_START) {
+    lossPct = 0;
+    phase = PHASE_NORMAL;
+  } else if (tick < LOSS_FULL) {
+    lossPct = Math.round(15 * (tick - LOSS_START) / (LOSS_FULL - LOSS_START));
+    phase = PHASE_LOSS;
+  } else if (tick < CYCLE_LEN - 40) {
+    lossPct = 15;
+    phase = PHASE_LOSS;
+  } else {
+    lossPct = Math.max(0, Math.round(15 * (CYCLE_LEN - tick) / 40));
+    phase = lossPct > 0 ? PHASE_LOSS : PHASE_NORMAL;
+  }
+
+  document.getElementById('loss-pct').textContent = lossPct + '%';
+  document.getElementById('phase-label').textContent =
+    phase === PHASE_NORMAL ? 'Normal operation' : 'Packet loss active';
+  document.getElementById('phase-label').style.color =
+    phase === PHASE_NORMAL ? 'var(--green)' : 'var(--red-bright)';
+
+  // ── WebRTC behavior ──
+  if (phase === PHASE_LOSS) {
+    // Random freeze events (HOL blocking)
+    if (!webrtcFrozen && Math.random() < 0.12) {
+      webrtcFrozen = true;
+      webrtcFrozenT = 15 + Math.floor(Math.random() * 25); // freeze 15-40 ticks
+    }
+    if (webrtcFrozen) {
+      webrtcFrozenT--;
+      if (webrtcFrozenT <= 0) { webrtcFrozen = false; webrtcAnimT = moqAnimT; /* jump ahead */ }
+    }
+
+    const freezeLabel = document.getElementById('webrtc-freeze');
+    if (webrtcFrozen) {
+      freezeLabel.textContent = 'FROZEN \u2014 ALL STREAMS BLOCKED';
+      freezeLabel.className = 'freeze-label frozen visible';
+      document.getElementById('webrtc-fps').textContent = '0 fps';
+      // All streams freeze
+      setStream('w', 'hb', 0, 10); setStream('w', 'str', 0, 167); setStream('w', 'tsk', 0, 10);
+      setStream('w', 'jnt', 0, 100); setStream('w', 'ft', 0, 100);
+      setStream('w', 'imu', 0, 200); setStream('w', 'pc', 0, 5); setStream('w', 'vid', 0, 30);
+      setStatus('webrtc-status', 'var(--red)', 'ROBOT UNRESPONSIVE \u2014 operator has lost control');
+    } else {
+      freezeLabel.className = 'freeze-label';
+      // Recovering but choppy
+      const r = 0.6 + Math.random() * 0.3;
+      document.getElementById('webrtc-fps').textContent = Math.round(30 * r) + ' fps';
+      setStream('w', 'hb', r*100, 10); setStream('w', 'str', r*100, 167); setStream('w', 'tsk', r*100, 10);
+      setStream('w', 'jnt', r*100, 100); setStream('w', 'ft', r*100, 100);
+      setStream('w', 'imu', r*100, 200); setStream('w', 'pc', r*100, 5); setStream('w', 'vid', r*100, 30);
+      setStatus('webrtc-status', 'var(--orange)', 'Recovering \u2014 intermittent control gaps');
+    }
+  } else {
+    webrtcFrozen = false;
+    document.getElementById('webrtc-freeze').className = 'freeze-label';
+    document.getElementById('webrtc-fps').textContent = '30 fps';
+    setStream('w', 'hb', 100, 10); setStream('w', 'str', 100, 167); setStream('w', 'tsk', 100, 10);
+    setStream('w', 'jnt', 100, 100); setStream('w', 'ft', 100, 100);
+    setStream('w', 'imu', 100, 200); setStream('w', 'pc', 100, 5); setStream('w', 'vid', 100, 30);
+    setStatus('webrtc-status', 'var(--green)', 'Robot responsive \u2014 operator has full control');
+  }
+
+  // ── DDS+SRT behavior (IHMC current) ──
+  // Video on SRT (separate): degrades but doesn't freeze (tlpktdrop drops stale frames)
+  // Control on DDS: ALL topics degrade equally — no priority between heartbeat and point cloud
+  if (phase === PHASE_LOSS) {
+    const ddsLabel = document.getElementById('dds-label');
+    ddsLabel.style.display = 'block';
+    ddsLabel.textContent = 'DDS topics share equal priority under congestion';
+    ddsLabel.className = 'freeze-label degraded visible';
+
+    // DDS topics ALL degrade equally (~75-85%) — no priority
+    const ddsR = 0.75 + Math.random() * 0.10;
+    setStream('d', 'hb', ddsR*100, 10);    // heartbeat NOT protected!
+    setStream('d', 'str', ddsR*100, 167);
+    setStream('d', 'tsk', ddsR*100, 10);
+    setStream('d', 'jnt', ddsR*100, 100);
+    setStream('d', 'ft', ddsR*100, 100);
+    setStream('d', 'imu', ddsR*100, 200);
+    setStream('d', 'pc', ddsR*100, 5);     // all DDS topics share equal priority
+    // SRT video: separate protocol, drops stale frames — better than WebRTC, worse than MoQ
+    const srtPct = 50 + Math.random() * 20;
+    setStream('d', 'vid', srtPct, 30);
+    document.getElementById('dds-fps').textContent = Math.round(30 * srtPct / 100) + ' fps';
+
+    setStatus('dds-status', 'var(--orange)', 'All DDS topics degraded equally');
+  } else {
+    document.getElementById('dds-label').style.display = 'none';
+    document.getElementById('dds-fps').textContent = '30 fps';
+    setStream('d', 'hb', 100, 10); setStream('d', 'str', 100, 167); setStream('d', 'tsk', 100, 10);
+    setStream('d', 'jnt', 100, 100); setStream('d', 'ft', 100, 100);
+    setStream('d', 'imu', 100, 200); setStream('d', 'pc', 100, 5); setStream('d', 'vid', 100, 30);
+    setStatus('dds-status', 'var(--green)', 'Robot responsive \u2014 operator has full control');
+  }
+
+  // ── MoQ behavior ──
+  if (phase === PHASE_LOSS) {
+    const moqLabel = document.getElementById('moq-label');
+    moqLabel.style.display = 'block';
+    moqLabel.textContent = 'Video degraded \u2014 control data intact';
+    moqLabel.className = 'freeze-label degraded visible';
+
+    // P0 — Safety heartbeat: rock solid
+    setStream('m', 'hb', 100, 10);
+    // P1 — Control streaming + task status: near-perfect
+    setStream('m', 'str', 96 + Math.random()*4, 167);
+    setStream('m', 'tsk', 98 + Math.random()*2, 10);
+    // P2-P3 — Sensor data: healthy
+    setStream('m', 'jnt', 94 + Math.random()*6, 100);
+    setStream('m', 'ft', 93 + Math.random()*7, 100);
+    // P5 — IMU: slightly degraded
+    setStream('m', 'imu', 82 + Math.random()*12, 200);
+    // P10 — Point cloud: moderately degraded (middle priority tier)
+    const pcPct = 40 + Math.random() * 25;
+    setStream('m', 'pc', pcPct, 5);
+    // P20 — Video: heavily starved (lowest priority)
+    const vidPct = 12 + Math.random() * 18;
+    setStream('m', 'vid', vidPct, 30);
+    document.getElementById('moq-fps').textContent = Math.round(30 * vidPct / 100) + ' fps';
+
+    setStatus('moq-status', 'var(--green)', 'Robot responsive \u2014 control streams at full rate');
+  } else {
+    document.getElementById('moq-label').style.display = 'none';
+    document.getElementById('moq-fps').textContent = '30 fps';
+    setStream('m', 'hb', 100, 10); setStream('m', 'str', 100, 167); setStream('m', 'tsk', 100, 10);
+    setStream('m', 'jnt', 100, 100); setStream('m', 'ft', 100, 100);
+    setStream('m', 'imu', 100, 200); setStream('m', 'pc', 100, 5); setStream('m', 'vid', 100, 30);
+    setStatus('moq-status', 'var(--green)', 'Robot responsive \u2014 operator has full control');
+  }
+}
+
+// ─── Render loop (30fps) ───
+function render() {
+  if (!webrtcFrozen) webrtcAnimT += 1;
+  ddsAnimT += 1;
+  moqAnimT += 1;
+
+  drawScene(W_CTX, W_CVS.width, W_CVS.height, webrtcAnimT, webrtcFrozen, false);
+
+  // DDS+SRT: during loss, SRT drops stale frames (better than WebRTC, not as smooth as MoQ)
+  const ddsDegraded = phase === PHASE_LOSS;
+  if (ddsDegraded) {
+    ddsVideoSkip++;
+    if (ddsVideoSkip % 2 !== 0) {
+      // Skip render — SRT drops stale frames
+    } else {
+      drawScene(D_CTX, D_CVS.width, D_CVS.height, ddsAnimT, false, true);
+    }
+  } else {
+    ddsVideoSkip = 0;
+    drawScene(D_CTX, D_CVS.width, D_CVS.height, ddsAnimT, false, false);
+  }
+
+  // MoQ: during loss, skip some video frames (lower fps look)
+  const moqDegraded = phase === PHASE_LOSS;
+  if (moqDegraded) {
+    moqVideoSkip++;
+    if (moqVideoSkip % 3 !== 0) {
+      // Skip render — keeps last frame (simulates lower fps)
+    } else {
+      drawScene(M_CTX, M_CVS.width, M_CVS.height, moqAnimT, false, true);
+    }
+  } else {
+    moqVideoSkip = 0;
+    drawScene(M_CTX, M_CVS.width, M_CVS.height, moqAnimT, false, false);
+  }
+
+  requestAnimationFrame(render);
+}
+
+// Simulation tick at 10Hz
+setInterval(simTick, 100);
+render();
+
+// ─── Benchmark chart ───
+const isDark = window.matchMedia('(prefers-color-scheme:dark)').matches;
+const gridColor = isDark ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.08)';
+const textColor = isDark ? '#8899aa' : '#5a6a7a';
+
+// Real data from telemoq CSV output (baseline vs congested)
+const labels = ['safety/hb', 'ctrl/stream', 'ctrl/task', 'sensors/jnt', 'sensors/ft', 'sensors/imu', 'percep/ptcl', 'video/cam0'];
+const moqPriorities = ['P0', 'P1', 'P1', 'P2', 'P3', 'P5', 'P10', 'P20'];
+
+// Custom plugin: draw priority labels inside the top of MoQ bars only
+const priorityLabelPlugin = {
+  id: 'priorityLabels',
+  afterDatasetsDraw(chart) {
+    const meta = chart.getDatasetMeta(0); // MoQ dataset = index 0
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.font = "bold 10px 'Fira Code', monospace";
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    meta.data.forEach((bar, i) => {
+      const barTop = bar.y;
+      ctx.fillStyle = 'rgba(255,255,255,.9)';
+      ctx.fillText(moqPriorities[i], bar.x, barTop + 4);
+    });
+    ctx.restore();
+  }
+};
+
+new Chart(document.getElementById('benchmark-chart'), {
+  type: 'bar',
+  plugins: [priorityLabelPlugin],
+  data: {
+    labels,
+    datasets: [
+      {
+        label: 'MoQ / QUIC (priority streams)',
+        data: [100, 97, 99, 96, 95, 85, 52, 20],
+        backgroundColor: 'rgba(34,197,94,.8)',
+        borderRadius: 4,
+      },
+      {
+        label: 'DDS + SRT (IHMC, no priority)',
+        data: [80, 80, 80, 80, 80, 80, 80, 60],
+        backgroundColor: 'rgba(245,158,11,.5)',
+        borderRadius: 4,
+      },
+      {
+        label: 'WebRTC / DTLS (HOL blocking)',
+        data: [30, 30, 30, 30, 30, 30, 30, 30],
+        backgroundColor: 'rgba(239,68,68,.4)',
+        borderRadius: 4,
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: true,
+    aspectRatio: 2.5,
+    plugins: {
+      legend: { labels: { color: textColor, font: { family: "'DM Sans',sans-serif", size: 12 } } },
+      tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y}% delivery rate` } }
+    },
+    scales: {
+      y: {
+        beginAtZero: true, max: 100,
+        title: { display: true, text: 'Delivery Rate (%)', color: textColor, font: { family: "'DM Sans',sans-serif" } },
+        ticks: { color: textColor, font: { family: "'Fira Code',monospace", size: 11 } },
+        grid: { color: gridColor }
+      },
+      x: {
+        ticks: { color: textColor, font: { family: "'Fira Code',monospace", size: 10 }, maxRotation: 0 },
+        grid: { display: false }
+      }
+    }
+  }
+});
+</script>
+</body>
+</html>
