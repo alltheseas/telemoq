@@ -138,6 +138,35 @@
   .delta-down { color: #ef4444; }
   .delta-same { color: #555; }
 
+  .hero {
+    background: linear-gradient(135deg, #0a1a0a 0%, #112211 100%);
+    border: 2px solid #22c55e;
+    border-radius: 8px;
+    padding: 1.4rem 1.5rem;
+    margin-bottom: 2rem;
+    line-height: 1.7;
+  }
+  .hero-headline {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #e0e0e0;
+    margin-bottom: 0.6rem;
+  }
+  .hero-stat {
+    font-size: 0.88rem;
+    color: #ccc;
+    margin-bottom: 0.3rem;
+  }
+  .hero-stat .num-green { color: #4ade80; font-weight: 600; }
+  .hero-stat .num-red { color: #ef4444; font-weight: 600; }
+  .hero-bottom {
+    font-size: 0.8rem;
+    color: #8bc48b;
+    margin-top: 0.7rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid #1a3a1a;
+  }
+
   .footer {
     margin-top: 3rem;
     padding-top: 1rem;
@@ -153,6 +182,16 @@
 
 <h1>telemoq benchmark</h1>
 <p class="subtitle">Same code, same relay, same connection. Only variable: priority scheduling.</p>
+
+<div class="hero">
+  <div class="hero-headline">Without priority scheduling, you lose 55% of control data under congestion.</div>
+  <div class="hero-stat">With priority: <span class="num-green">12.8 msgs/s</span> across safety and control tracks</div>
+  <div class="hero-stat">Without priority: <span class="num-red">5.7 msgs/s</span> &mdash; IMU dead, joints at 19% of prior rate, streaming at 27%</div>
+  <div class="hero-bottom">
+    Teleop needs predictable degradation: sacrifice video, protect control. Priority scheduling gives that.
+    Without it, which tracks survive is a coin flip. Use MoQ with per-stream priority, not WebRTC or raw DDS over WAN.
+  </div>
+</div>
 
 <div class="box">
   <strong>Methodology:</strong> moq-relay on localhost:4443 (self-signed TLS). telemoq publisher emitting 8 tracks

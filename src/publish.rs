@@ -13,25 +13,39 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-pub async fn run(client: moq_native::Client, url: &Url, broadcast_name: &str, no_priority: bool) -> anyhow::Result<()> {
-    if no_priority {
+pub async fn run(client: moq_native::Client, url: &Url, broadcast_name: &str, no_priority: bool, single_stream: bool) -> anyhow::Result<()> {
+    if single_stream {
+        tracing::warn!("--single-stream: all tracks multiplexed into one QUIC stream (WebRTC-style HOL blocking)");
+    } else if no_priority {
         tracing::warn!("--no-priority: all tracks set to priority 0 (no starvation)");
     }
-    tracing::info!(broadcast = %broadcast_name, url = %url, no_priority, "publishing telemetry");
+    tracing::info!(broadcast = %broadcast_name, url = %url, no_priority, single_stream, "publishing telemetry");
 
     let origin = Origin::produce();
     let mut broadcast = Broadcast::produce();
 
-    // Create a TrackProducer for each telemetry track
+    // In single-stream mode, all data goes through one MoQ track (one QUIC stream).
+    // This reproduces WebRTC's head-of-line blocking: any congestion blocks everything.
+    let mut mux_track: Option<TrackProducer> = None;
     let mut track_producers: Vec<TrackProducer> = Vec::new();
-    for def in TRACKS {
-        let priority = if no_priority { 0 } else { def.priority };
+
+    if single_stream {
         let track = broadcast.create_track(Track {
-            name: def.name.to_string(),
-            priority,
+            name: "multiplexed".to_string(),
+            priority: 0,
         });
-        tracing::info!(track = %def.name, priority, rate_hz = def.rate_hz, "created track");
-        track_producers.push(track);
+        tracing::info!("created single multiplexed track (WebRTC HOL simulation)");
+        mux_track = Some(track);
+    } else {
+        for def in TRACKS {
+            let priority = if no_priority { 0 } else { def.priority };
+            let track = broadcast.create_track(Track {
+                name: def.name.to_string(),
+                priority,
+            });
+            tracing::info!(track = %def.name, priority, rate_hz = def.rate_hz, "created track");
+            track_producers.push(track);
+        }
     }
 
     origin.publish_broadcast(broadcast_name, broadcast.consume());
@@ -63,7 +77,23 @@ pub async fn run(client: moq_native::Client, url: &Url, broadcast_name: &str, no
 
     let mut heartbeat_seq: u64 = 0;
 
-    tracing::info!("publishing started — all 8 tracks active (IHMC KST-aligned)");
+    let mode = if single_stream { "single-stream" } else if no_priority { "no-priority" } else { "priority" };
+    tracing::info!("publishing started — all 8 tracks active (IHMC KST-aligned), mode={mode}");
+
+    // Helper: write a frame to the correct destination.
+    // In single-stream mode, prefix each frame with a 1-byte track index for demuxing.
+    macro_rules! emit {
+        ($idx:expr, $payload:expr) => {
+            if let Some(ref mut mux) = mux_track {
+                let mut buf = Vec::with_capacity(1 + $payload.len());
+                buf.push($idx as u8);
+                buf.extend_from_slice(&$payload);
+                mux.write_frame(bytes::Bytes::from(buf));
+            } else {
+                track_producers[$idx].write_frame(bytes::Bytes::from($payload));
+            }
+        };
+    }
 
     tokio::select! {
         res = session.closed() => res.context("session closed"),
@@ -75,51 +105,49 @@ pub async fn run(client: moq_native::Client, url: &Url, broadcast_name: &str, no
                         heartbeat_seq += 1;
                         let data = schema::generate_heartbeat(ts, heartbeat_seq);
                         let payload = bincode::serialize(&data).unwrap();
-                        track_producers[0].write_frame(bytes::Bytes::from(payload));
+                        emit!(0, payload);
                     }
                     _ = streaming_interval.tick() => {
                         let ts = now_ms();
                         let data = schema::generate_streaming_command(ts);
                         let payload = bincode::serialize(&data).unwrap();
-                        track_producers[1].write_frame(bytes::Bytes::from(payload));
+                        emit!(1, payload);
                     }
                     _ = task_status_interval.tick() => {
                         let ts = now_ms();
                         let data = schema::generate_task_status(ts);
                         let payload = bincode::serialize(&data).unwrap();
-                        track_producers[2].write_frame(bytes::Bytes::from(payload));
+                        emit!(2, payload);
                     }
                     _ = joints_interval.tick() => {
                         let ts = now_ms();
                         let data = schema::generate_joint_state(ts);
                         let payload = bincode::serialize(&data).unwrap();
-                        track_producers[3].write_frame(bytes::Bytes::from(payload));
+                        emit!(3, payload);
                     }
                     _ = ft_interval.tick() => {
                         let ts = now_ms();
                         let data = schema::generate_force_torque(ts);
                         let payload = bincode::serialize(&data).unwrap();
-                        track_producers[4].write_frame(bytes::Bytes::from(payload));
+                        emit!(4, payload);
                     }
                     _ = imu_interval.tick() => {
                         let ts = now_ms();
                         let data = schema::generate_imu(ts);
                         let payload = bincode::serialize(&data).unwrap();
-                        track_producers[5].write_frame(bytes::Bytes::from(payload));
+                        emit!(5, payload);
                     }
                     _ = pointcloud_interval.tick() => {
                         let ts = now_ms();
-                        // 50KB downsampled point cloud with embedded timestamp
                         let mut cloud = vec![0u8; 50_000];
                         cloud[..8].copy_from_slice(&ts.to_le_bytes());
-                        track_producers[6].write_frame(bytes::Bytes::from(cloud));
+                        emit!(6, cloud);
                     }
                     _ = video_interval.tick() => {
                         let ts = now_ms();
-                        // 50KB video frame with embedded timestamp
                         let mut frame = vec![0u8; 50_000];
                         frame[..8].copy_from_slice(&ts.to_le_bytes());
-                        track_producers[7].write_frame(bytes::Bytes::from(frame));
+                        emit!(7, frame);
                     }
                 }
             }

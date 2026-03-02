@@ -43,9 +43,14 @@ pub struct Config {
     pub csv: bool,
 
     /// Disable per-stream priority (all tracks get equal priority 0).
-    /// Benchmark mode: simulates a transport without priority scheduling.
+    /// Benchmark mode: simulates a transport without priority scheduling (like DDS).
     #[arg(long)]
     pub no_priority: bool,
+
+    /// Multiplex all tracks into a single QUIC stream.
+    /// Benchmark mode: simulates WebRTC-style head-of-line blocking.
+    #[arg(long)]
+    pub single_stream: bool,
 }
 
 #[derive(Parser, Clone)]
@@ -62,11 +67,11 @@ async fn main() -> anyhow::Result<()> {
     let client = config.client.init()?;
 
     match config.role {
-        Role::Publish => publish::run(client, &config.url, &config.broadcast, config.no_priority)
+        Role::Publish => publish::run(client, &config.url, &config.broadcast, config.no_priority, config.single_stream)
             .await
             .context("publisher error"),
         Role::Subscribe => {
-            subscribe::run(client, &config.url, &config.broadcast, config.csv, config.no_priority)
+            subscribe::run(client, &config.url, &config.broadcast, config.csv, config.no_priority, config.single_stream)
                 .await
                 .context("subscriber error")
         }

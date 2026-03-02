@@ -36,6 +36,7 @@ pub async fn run(
     broadcast_name: &str,
     csv: bool,
     no_priority: bool,
+    single_stream: bool,
 ) -> anyhow::Result<()> {
     tracing::info!(broadcast = %broadcast_name, url = %url, "subscribing to telemetry");
 
@@ -65,7 +66,7 @@ pub async fn run(
     let display_broadcast = broadcast_name.to_string();
     let display_url = url.to_string();
     let display_handle = tokio::spawn(async move {
-        display_loop(&display_stats, &display_broadcast, &display_url, start, csv, no_priority).await;
+        display_loop(&display_stats, &display_broadcast, &display_url, start, csv, no_priority, single_stream).await;
     });
 
     // Main event loop: wait for broadcasts, subscribe to tracks
@@ -76,21 +77,36 @@ pub async fn run(
                     (path, Some(broadcast)) => {
                         tracing::info!(broadcast = %path, "broadcast online — subscribing to tracks");
 
-                        // Subscribe to all tracks
-                        for (i, def) in TRACKS.iter().enumerate() {
+                        if single_stream {
+                            // Single-stream mode: subscribe to one "multiplexed" track, demux by prefix byte
                             let track_info = Track {
-                                name: def.name.to_string(),
-                                priority: def.priority,
+                                name: "multiplexed".to_string(),
+                                priority: 0,
                             };
                             let consumer = broadcast.subscribe_track(&track_info);
-                            let track_stats = stats[i].clone();
-                            let track_name = def.name;
-
+                            let all_stats: Vec<Arc<TrackStats>> = stats.iter().map(Arc::clone).collect();
                             tokio::spawn(async move {
-                                if let Err(e) = read_track(consumer, track_stats, track_name).await {
-                                    tracing::warn!(track = %track_name, error = %e, "track reader ended");
+                                if let Err(e) = read_muxed_track(consumer, &all_stats).await {
+                                    tracing::warn!(error = %e, "multiplexed track reader ended");
                                 }
                             });
+                        } else {
+                            // Normal mode: subscribe to each track individually
+                            for (i, def) in TRACKS.iter().enumerate() {
+                                let track_info = Track {
+                                    name: def.name.to_string(),
+                                    priority: def.priority,
+                                };
+                                let consumer = broadcast.subscribe_track(&track_info);
+                                let track_stats = stats[i].clone();
+                                let track_name = def.name;
+
+                                tokio::spawn(async move {
+                                    if let Err(e) = read_track(consumer, track_stats, track_name).await {
+                                        tracing::warn!(track = %track_name, error = %e, "track reader ended");
+                                    }
+                                });
+                            }
                         }
                     }
                     (path, None) => {
@@ -170,6 +186,76 @@ async fn read_track(
     Ok(())
 }
 
+/// Read from the single multiplexed track, demux by 1-byte track index prefix.
+async fn read_muxed_track(
+    mut consumer: TrackConsumer,
+    stats: &[Arc<TrackStats>],
+) -> anyhow::Result<()> {
+    let now_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+
+    let mut last_recv_times: [Option<u64>; 8] = [None; 8];
+
+    while let Some(mut group) = consumer.next_group().await? {
+        while let Some(frame) = group.read_frame().await? {
+            if frame.is_empty() {
+                continue;
+            }
+
+            let track_idx = frame[0] as usize;
+            if track_idx >= stats.len() || track_idx >= TRACKS.len() {
+                continue;
+            }
+
+            let payload = frame.slice(1..); // strip the 1-byte prefix
+            let recv_time = now_ms();
+            let stat = &stats[track_idx];
+
+            stat.recv_count.fetch_add(1, Ordering::Relaxed);
+            stat.recv_bytes.fetch_add(payload.len() as u64, Ordering::Relaxed);
+
+            // Track inter-arrival gap per original track
+            if let Some(prev) = last_recv_times[track_idx] {
+                let gap = recv_time.saturating_sub(prev);
+                let mut current = stat.max_gap_ms.load(Ordering::Relaxed);
+                while gap > current {
+                    match stat.max_gap_ms.compare_exchange_weak(
+                        current, gap, Ordering::Relaxed, Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(v) => current = v,
+                    }
+                }
+            }
+            last_recv_times[track_idx] = Some(recv_time);
+
+            // Extract timestamp and compute latency
+            if payload.len() >= 8 {
+                let track_name = TRACKS[track_idx].name;
+                let ts = if is_raw_blob_track(track_name) {
+                    u64::from_le_bytes(payload[..8].try_into().unwrap())
+                } else {
+                    bincode::deserialize::<u64>(&payload[..8]).unwrap_or(0)
+                };
+
+                if ts > 0 && recv_time > ts {
+                    let latency = recv_time - ts;
+                    stat.latency_sum_ms.fetch_add(latency, Ordering::Relaxed);
+                    stat.latency_count.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+
+            *stat.last_payload.lock().unwrap() = Some(payload);
+        }
+    }
+
+    Ok(())
+}
+
 async fn display_loop(
     stats: &[Arc<TrackStats>],
     broadcast_name: &str,
@@ -177,8 +263,9 @@ async fn display_loop(
     start: tokio::time::Instant,
     csv: bool,
     no_priority: bool,
+    single_stream: bool,
 ) {
-    let mode = if no_priority { "no-priority" } else { "priority" };
+    let mode = if single_stream { "single-stream" } else if no_priority { "no-priority" } else { "priority" };
     if csv {
         println!("elapsed_s,track,priority,recv_per_s,expected_per_s,pct,bytes_per_s,avg_latency_ms,max_gap_ms,mode");
     }
@@ -213,7 +300,9 @@ async fn display_loop(
 
         // ANSI terminal display
         print!("\x1B[H\x1B[J"); // cursor home + clear
-        let mode_display = if no_priority {
+        let mode_display = if single_stream {
+            "\x1B[31m SINGLE-STREAM \x1B[0m"
+        } else if no_priority {
             "\x1B[33m NO-PRIORITY \x1B[0m"
         } else {
             "\x1B[32m PRIORITY \x1B[0m"

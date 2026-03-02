@@ -163,11 +163,17 @@ df.pivot(columns="track", values="recv_per_s").plot(ax=ax1, title="Recv rate (pr
 df.pivot(columns="track", values="avg_latency_ms").plot(ax=ax2, title="Latency (priority queuing)")
 ```
 
-## Benchmark: Priority vs No-Priority
+## Benchmark: Three Modes, One Binary
 
-The `--no-priority` flag disables per-stream priority scheduling, setting all 8 tracks to equal priority 0. Same binary, same relay, same connection, same payloads — one variable: priority scheduling.
+Three benchmark modes isolate the effect of priority scheduling and stream multiplexing:
 
-This produces an apples-to-apples comparison: MoQ with priority (the default) vs MoQ without priority (equivalent to a transport that treats all streams equally, like DDS topics sharing a bus or WebRTC's uniform congestion response).
+| Flag | Simulates | Behavior |
+|------|-----------|----------|
+| *(default)* | **MoQ** | Per-stream priority scheduling |
+| `--no-priority` | **DDS** | All tracks equal priority 0, no starvation |
+| `--single-stream` | **WebRTC** | All tracks multiplexed into one QUIC stream (HOL blocking) |
+
+Same binary, same relay, same connection, same payloads. The only variable changes between runs.
 
 ```bash
 # Terminal 1: relay
@@ -181,16 +187,23 @@ cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot
 
 # Enable 15% packet loss, wait 60s, ctrl-C both.
 
-# Run 2: Without priority
+# Run 2: Without priority (DDS-like)
 # Terminal 2: publisher
 cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 --no-priority publish
 # Terminal 3: subscriber
 cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 --no-priority --csv subscribe > no-priority.csv
+
+# Run 3: Single stream (WebRTC-like)
+# Terminal 2: publisher
+cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 --single-stream publish
+# Terminal 3: subscriber
+cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 --single-stream --csv subscribe > single-stream.csv
 ```
 
 **Expected results under congestion:**
 - `with-priority.csv`: P0-P1 tracks at ~100% delivery, video degraded (priority starvation working)
-- `no-priority.csv`: ALL tracks degraded equally (no prioritization)
+- `no-priority.csv`: ALL tracks degraded equally (no prioritization, like DDS)
+- `single-stream.csv`: ALL tracks blocked together during congestion (HOL blocking, like WebRTC)
 
 See `telemoq-benchmark.html` for a visual comparison chart.
 
