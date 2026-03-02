@@ -365,7 +365,7 @@ body{
 <!-- Key results — delivery rates under congestion -->
 <section class="data-section fade-in" style="--i:2">
   <h2>Delivery rates under congestion</h2>
-  <p class="sub">MoQ bars: measured from telemoq via relay under bandwidth constraint. DDS+SRT and WebRTC bars: modeled from protocol behavior, not measured from live stacks.</p>
+  <p class="sub">Bar chart: modeled delivery rates illustrating protocol behavior under congestion. Callout numbers (17.4/s, 5.3/s, 0.1/s): measured from telemoq in three modes &mdash; priority, no-priority (DDS-like), single-stream (WebRTC-like) &mdash; same binary, same relay.</p>
   <a href="/Users/e/Desktop/develop/telemoq/telemoq-benchmark.html" style="display:block;margin:1.2rem 0;padding:1rem 1.4rem;border-radius:12px;background:var(--red-dim);border:1px solid rgba(239,68,68,.3);text-decoration:none;transition:border-color .2s">
     <span style="display:block;font-size:1.5rem;font-weight:700;color:var(--red-bright);letter-spacing:-.02em">Priority: 17.4/s &nbsp; No-priority: 5.3/s &nbsp; Single-stream: 0.1/s</span>
     <span style="display:block;margin-top:.4rem;font-family:var(--font-mono);font-size:.82rem;color:var(--text-dim)">Control data throughput under congestion. Three modes, one binary. Priority delivers 3.3x more than DDS-like, 174x more than WebRTC-like. <span style="color:var(--text);text-decoration:underline">See full benchmark &rarr;</span></span>
@@ -376,10 +376,10 @@ body{
     </div>
     <div class="takeaway">
       <div class="takeaway-title">Key Takeaway</div>
-      <p>Under congestion, MoQ delivers <strong>98-100% of safety-critical control data</strong> (heartbeat, SE3 commands, force/torque) by starving low-priority video first.</p>
-      <p>DDS+SRT smartly isolates video on a separate protocol. But within DDS, <strong>all topics share equal priority ~80%</strong>. MoQ unifies both into a single connection with per-stream priority.</p>
-      <p>WebRTC delivers <strong>~30% of ALL streams equally</strong> &mdash; including e-stop. The operator cannot reliably emergency-stop the robot.</p>
-      <p>The transport layer decides what gets through. With MoQ, that decision is <strong>priority-aware</strong>. With DDS, it's best-effort. With WebRTC, it's random.</p>
+      <p>Under congestion, MoQ's priority scheduler protects <strong>all safety and control tracks</strong> (heartbeat, SE3 commands, joints, force/torque) by starving low-priority video first. Measured: <strong>17.4 control msgs/s.</strong></p>
+      <p>Without priority (DDS-like), all tracks degrade unpredictably. <strong>Control throughput drops to 5.3 msgs/s</strong> &mdash; 70% less. IMU and streaming go to zero. Which tracks survive is arbitrary.</p>
+      <p>Single-stream (WebRTC-like) causes near-total blackout. <strong>Control throughput: 0.1 msgs/s</strong> &mdash; 99.4% loss. Head-of-line blocking kills everything.</p>
+      <p>The transport layer decides what gets through. With MoQ, that decision is <strong>priority-aware</strong>. With DDS, it's best-effort. With WebRTC, it's head-of-line blocked.</p>
       <a href="/Users/e/Desktop/develop/telemoq/telemoq-benchmark.html" style="display:block;margin-top:.8rem;padding:.6rem .8rem;border-radius:8px;background:var(--green-dim);border:1px solid rgba(34,197,94,.3);text-decoration:none;color:var(--text);font-size:.85rem"><strong style="color:var(--green)">Measured proof:</strong> 3.3x more control data with priority vs DDS-like. 174x more vs WebRTC-like. <span style="color:var(--accent);text-decoration:underline">See 3-mode benchmark &rarr;</span></a>
     </div>
   </div>
@@ -1182,7 +1182,9 @@ const isDark = window.matchMedia('(prefers-color-scheme:dark)').matches;
 const gridColor = isDark ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.08)';
 const textColor = isDark ? '#8899aa' : '#5a6a7a';
 
-// Real data from telemoq CSV output (baseline vs congested)
+// Modeled delivery rates illustrating protocol behavior under congestion.
+// Pattern matches measured results: priority starvation curve, unpredictable no-priority, HOL blackout.
+// For measured data, see telemoq-benchmark.html and benchmarks/*.csv.
 const labels = ['safety/hb', 'ctrl/stream', 'ctrl/task', 'sensors/jnt', 'sensors/ft', 'sensors/imu', 'percep/ptcl', 'video/cam0'];
 const moqPriorities = ['P0', 'P1', 'P1', 'P2', 'P3', 'P5', 'P10', 'P20'];
 
@@ -1212,20 +1214,20 @@ new Chart(document.getElementById('benchmark-chart'), {
     labels,
     datasets: [
       {
-        label: 'MoQ / QUIC (priority streams)',
-        data: [100, 97, 99, 96, 95, 85, 52, 20],
+        label: 'MoQ (priority streams)',
+        data: [98, 95, 98, 88, 85, 55, 5, 0],
         backgroundColor: 'rgba(34,197,94,.8)',
         borderRadius: 4,
       },
       {
-        label: 'DDS + SRT (IHMC, no priority)',
-        data: [80, 80, 80, 80, 80, 80, 80, 60],
+        label: 'No-priority (DDS-like)',
+        data: [45, 5, 10, 15, 60, 5, 5, 5],
         backgroundColor: 'rgba(245,158,11,.5)',
         borderRadius: 4,
       },
       {
-        label: 'WebRTC / DTLS (HOL blocking)',
-        data: [30, 30, 30, 30, 30, 30, 30, 30],
+        label: 'Single-stream (WebRTC-like)',
+        data: [5, 2, 2, 2, 2, 2, 2, 2],
         backgroundColor: 'rgba(239,68,68,.4)',
         borderRadius: 4,
       }

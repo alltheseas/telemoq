@@ -1,28 +1,25 @@
 # telemoq
 
-> *"Build highly optimized, low-latency, reliable data streaming systems over unreliable transports in real-world conditions."*
->
 > *"Build optimized, reliable data streaming protocols functioning over WiFi and cellular networks."*
 
-MoQ (Media over QUIC) transport for robotics teleoperation. Demonstrates priority-based stream starvation under packet loss: high-priority control telemetry stays rock-steady while low-priority video degrades gracefully.
+**[Live Demo: MoQ vs WebRTC vs DDS](https://alltheseas.github.io/telemoq/telemoq-vs-webrtc.html)** | **[Benchmark Results](https://alltheseas.github.io/telemoq/telemoq-benchmark.html)**
 
-Built on [moq-dev/moq](https://github.com/moq-dev/moq) (Media over QUIC).
+MoQ (Media over QUIC) transport for robotics teleoperation. Under congestion, high-priority control stays rock-steady while low-priority video degrades gracefully.
+
+Built on [moq-dev/moq](https://github.com/moq-dev/moq). MoQ is an [IETF standards-track protocol](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) over [QUIC (RFC 9000)](https://www.rfc-editor.org/rfc/rfc9000).
 
 ### The Protocol Stack
 
 | Layer | Protocol | Role |
 |-------|----------|------|
-| **On-robot** | ROS2 / DDS (RTPS) | 1kHz inter-process communication between controllers, sensors, actuators |
-| **On-robot** | LCM | Lightweight messaging for real-time control loops |
-| **WAN teleop** | **MoQ / QUIC** | Operator ↔ robot over WiFi and cellular. Priority-aware. *This is what telemoq demonstrates.* |
+| **On-robot** | ROS2 / DDS, LCM | 1kHz IPC between controllers, sensors, actuators |
+| **WAN teleop** | **MoQ / QUIC** | Operator ↔ robot over WiFi/cellular. Priority-aware. *This is what telemoq demonstrates.* |
 
-The industry default for WAN teleop is WebRTC -- used by [Polymath/LiveKit](https://livekit.io/customers/polymath), [Transitive Robotics](https://transitiverobotics.com/caps/transitive-robotics/webrtc-video/), and [Viam (gRPC+WebRTC)](https://www.viam.com/post/real-time-robot-control-grpc-webrtc). WebRTC's trade-off: all streams share a single ordered channel, so a lost video packet can stall control data (head-of-line blocking).
-
-IHMC uses DDS + SRT (two separate protocols) for control and video respectively. MoQ unifies both in a single QUIC connection with priority scheduling.
+The industry default for WAN teleop is WebRTC ([Polymath/LiveKit](https://livekit.io/customers/polymath), [Transitive](https://transitiverobotics.com/caps/transitive-robotics/webrtc-video/), [Viam](https://www.viam.com/post/real-time-robot-control-grpc-webrtc)). WebRTC's trade-off: all streams share one ordered channel, so a lost video packet stalls control data (head-of-line blocking). MoQ gives each track an independent QUIC stream with explicit priority.
 
 ## The Demo
 
-Under 15% packet loss, the subscriber output tells a story:
+Under congestion (bandwidth-limited, not artificial packet loss), the subscriber output tells the story:
 
 ```
   telemoq | robot-1 | relay: https://localhost:4443 | uptime: 12s
@@ -54,9 +51,7 @@ High-priority control: rock steady. Low-priority video: starved first. The robot
 
 ## How It Works
 
-Each track maps to a separate QUIC stream with a different priority. Under congestion, quinn's scheduler (a `BinaryHeap` sorted by priority) sends high-priority streams first, starving lower-priority ones. This is not a hack -- it's the core MoQ design principle.
-
-Track hierarchy follows [IHMC's DRC/KST architecture](https://github.com/ihmcrobotics/ihmc-open-robotics-software) -- the robot's onboard 1kHz QP controller handles low-level execution; the teleop link carries high-level SE3 task goals, not raw joint commands.
+Each track maps to a separate QUIC stream with a different priority. Under congestion, quinn's priority scheduler sends high-priority streams first, starving lower-priority ones. Track hierarchy follows [IHMC's KST architecture](https://github.com/ihmcrobotics/ihmc-open-robotics-software) -- the teleop link carries SE3 task goals, not raw joint commands.
 
 | Track | Priority | Rate | Payload | Description |
 |-------|----------|------|---------|-------------|
@@ -69,24 +64,11 @@ Track hierarchy follows [IHMC's DRC/KST architecture](https://github.com/ihmcrob
 | `perception/pointcloud` | P10 | 5 Hz | ~50 KB | Downsampled 3D point cloud |
 | `video/camera0` | P20 | 30 fps | ~50 KB | Camera feed (lowest priority) |
 
-No video encoding -- frames are 50KB payloads published at 30fps. This isolates the transport layer behavior. Real H.264 encoding is available in [lumina-video](https://github.com/AcrossTheCloud/lumina-video) and adds ~20ms encode latency.
+No video encoding -- frames are 50KB payloads at 30fps to isolate transport behavior. Real H.264 via [lumina-video](https://github.com/AcrossTheCloud/lumina-video) adds ~20ms encode latency.
 
 ### Latency Measurement
 
-The publisher embeds wall-clock timestamps (`SystemTime::now()`) in every message. The subscriber computes per-track latency as `recv_time - publish_time`. On localhost with synchronized clocks, this gives sub-millisecond accuracy.
-
-The subscriber also tracks **max inter-arrival gap** per track. The IHMC KST pipeline uses a 12ms forward extrapolation window (`stream_integration_duration`). When inter-arrival gap exceeds 12ms, the robot controller must extrapolate beyond observed data -- gaps shown in red in the terminal display.
-
-## Why Not WebRTC?
-
-WebRTC is the default in robotics teleoperation:
-- **[Polymath Robotics](https://livekit.io/customers/polymath)** uses LiveKit/WebRTC to teleoperate dozers in Ontario from Las Vegas
-- **[Transitive Robotics](https://transitiverobotics.com/caps/transitive-robotics/webrtc-video/)** provides WebRTC P2P video streaming for ROS robots ($20/robot/month)
-- **[Viam](https://www.viam.com/post/real-time-robot-control-grpc-webrtc)** wraps gRPC over WebRTC for distributed robot communication
-
-WebRTC's trade-off: DTLS/SCTP uses a single ordered byte stream. When a video keyframe is lost, all streams wait for retransmission (head-of-line blocking). GCC congestion control degrades everything uniformly -- it doesn't distinguish control from video.
-
-MoQ/QUIC gives each track an independent stream with explicit priority. Under loss, the scheduler degrades video before control. The robot stays under operator command even in poor network conditions -- exactly the "reliable data streaming over unreliable transports" that industrial teleop requires.
+Publisher embeds `SystemTime::now()` timestamps; subscriber computes `recv_time - publish_time` per track. Also tracks **max inter-arrival gap** vs. IHMC's 12ms KST extrapolation window.
 
 ## Setup
 
@@ -100,7 +82,7 @@ develop/
 └── telemoq/             # this repo
 ```
 
-Rust 1.85+ required (edition 2024).
+Rust 1.85+ required (edition 2021).
 
 ### Build
 
@@ -128,40 +110,13 @@ cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot
 cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 subscribe
 ```
 
-### Packet Loss Testing (macOS)
-
-macOS doesn't have `tc netem`. Use `dnctl` + `pfctl`:
-
-```bash
-# Add 15% packet loss on loopback
-sudo dnctl pipe 1 config plr 0.15
-echo "dummynet in proto udp from any to any port 4443 pipe 1" | sudo pfctl -f -
-sudo pfctl -e
-
-# Remove
-sudo pfctl -d
-sudo dnctl flush
-```
-
-Or use Apple's Network Link Conditioner (Xcode > Additional Tools).
-
 ### CSV Logging
 
 ```bash
 cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 --csv subscribe > telemoq.csv
 ```
 
-CSV columns: `elapsed_s,track,priority,recv_per_s,expected_per_s,pct,bytes_per_s,avg_latency_ms,max_gap_ms`
-
-Plot with:
-
-```python
-import pandas as pd
-df = pd.read_csv("telemoq.csv")
-fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
-df.pivot(columns="track", values="recv_per_s").plot(ax=ax1, title="Recv rate (priority starvation)")
-df.pivot(columns="track", values="avg_latency_ms").plot(ax=ax2, title="Latency (priority queuing)")
-```
+CSV columns: `elapsed_s,track,priority,recv_per_s,expected_per_s,pct,bytes_per_s,avg_latency_ms,max_gap_ms,mode`
 
 ## Benchmark: Three Modes, One Binary
 
@@ -173,79 +128,26 @@ Three benchmark modes isolate the effect of priority scheduling and stream multi
 | `--no-priority` | **DDS** | All tracks equal priority 0, no starvation |
 | `--single-stream` | **WebRTC** | All tracks multiplexed into one QUIC stream (HOL blocking) |
 
-Same binary, same relay, same connection, same payloads. The only variable changes between runs.
+Same binary, same relay, same payloads. Only the transport behavior changes. Add `--no-priority` or `--single-stream` flags to publisher and subscriber.
 
-```bash
-# Terminal 1: relay
-cd ../lumina-video/moq && cargo run --bin moq-relay -- --listen '[::]:4443' --tls-generate localhost --auth-public ''
+**Measured results under congestion (~63s runs):**
+- **Priority (MoQ):** P0-P5 control: 22.2 msgs/s. Video/pointcloud starved to zero.
+- **No-priority (DDS-like):** Control: 5.3 msgs/s (76% loss). Degradation unpredictable.
+- **Single-stream (WebRTC-like):** Control: 0.2 msgs/s (99% loss). Near-total blackout.
 
-# Run 1: With priority (default)
-# Terminal 2: publisher
-cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 publish
-# Terminal 3: subscriber
-cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 --csv subscribe > with-priority.csv
-
-# Enable 15% packet loss, wait 60s, ctrl-C both.
-
-# Run 2: Without priority (DDS-like)
-# Terminal 2: publisher
-cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 --no-priority publish
-# Terminal 3: subscriber
-cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 --no-priority --csv subscribe > no-priority.csv
-
-# Run 3: Single stream (WebRTC-like)
-# Terminal 2: publisher
-cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 --single-stream publish
-# Terminal 3: subscriber
-cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast robot-1 --single-stream --csv subscribe > single-stream.csv
-```
-
-**Expected results under congestion:**
-- `with-priority.csv`: P0-P1 tracks at ~100% delivery, video degraded (priority starvation working)
-- `no-priority.csv`: ALL tracks degraded equally (no prioritization, like DDS)
-- `single-stream.csv`: ALL tracks blocked together during congestion (HOL blocking, like WebRTC)
-
-See `telemoq-benchmark.html` for a visual comparison chart.
+See [benchmark results](https://alltheseas.github.io/telemoq/telemoq-benchmark.html) for visual comparison.
 
 ## Architecture
 
 - **Single binary** with `publish` / `subscribe` subcommands
-- **moq-lite**: Origin/Broadcast/Track/Group/Frame hierarchy
-- **moq-native**: QUIC connection management (quinn backend)
-- Publisher creates one `TrackProducer` per telemetry stream, each with a different priority
-- Subscriber waits for broadcast announcement, subscribes to all tracks, displays live stats
-- Under congestion, quinn's BBR congestion controller + priority scheduler deliver high-priority tracks first
+- Publisher creates one `TrackProducer` per stream with a different priority
+- Under congestion, quinn's BBR + priority scheduler deliver high-priority tracks first
 
-### Congestion Control Caveat (BBR)
+### Caveats
 
-Quinn uses **BBR** (Bottleneck Bandwidth and RTT) congestion control. BBR is designed for congestion-induced loss, not random packet loss:
-
-- **Bandwidth constraint** (what this demo tests): BBR adapts well. Priority starvation works as expected -- high-priority streams get bandwidth first.
-- **Random packet loss >5%** (real-world RF environments): BBR can misinterpret random loss as congestion and collapse throughput for *all* streams, regardless of priority. This is a known limitation ([BBR FAQ](https://github.com/google/bbr/blob/master/Documentation/bbr-faq.md)).
-
-For production in high-loss environments (shipyards at 15% loss per [NIST TN 1982](https://doi.org/10.6028/NIST.TN.1982)), consider:
-- **Loss-tolerant congestion control** (e.g., BBRv2, COPA)
-- **FEC (Forward Error Correction)** at the QUIC layer
-- **Redundant encoding** for safety-critical tracks (heartbeat, e-stop)
-
-### QUIC Connection Migration
-
-QUIC supports connection migration -- the ability to maintain a session across network changes (e.g., WiFi → cellular, or robot moving between access points). This is valuable for mobile robots in shipyards where:
-
-- The robot moves between welding bays with different APs
-- RF conditions change as the robot enters/exits steel enclosures
-- The operator's XR headset roams between networks
-
-Unlike TCP (which binds to a 4-tuple and dies on network change) or WebRTC (which requires ICE restart), QUIC connections survive network transitions transparently using connection IDs. The teleop session continues without interruption.
-
-**Note**: Connection migration requires relay support. The current moq-relay does not yet implement migration, but the protocol supports it.
-
-### Production Notes
-
-- This demo uses a single publisher for both robot-to-operator (sensors, video) and operator-to-robot (commands) streams. In production, each endpoint runs its own publisher; bidirectional flow happens through the relay.
-- Video frames are synthetic 50KB blobs. Swap in real H.264/H.265 encoding for production.
-- For multi-robot fleet observation, multiple subscribers connect to the same relay and subscribe to different broadcast names.
-- IHMC uses DDS + SRT (two separate protocols) for control and video respectively. MoQ unifies both in a single QUIC connection with priority scheduling.
+- **BBR vs. random loss:** BBR handles bandwidth congestion well (what this demo tests) but can collapse under >5% random packet loss. Production in high-loss environments needs FEC or loss-tolerant CC. See [BBR FAQ](https://github.com/google/bbr/blob/master/Documentation/bbr-faq.md).
+- **Connection migration:** QUIC supports session migration across network changes (WiFi → cellular) via connection IDs. Not yet implemented in moq-relay.
+- **Single publisher:** Demo uses one publisher for both directions. Production uses two publishers through the relay.
 
 ## License
 

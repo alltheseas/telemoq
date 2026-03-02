@@ -217,16 +217,14 @@
 </div>
 
 <div class="box">
-  <strong>Methodology:</strong> moq-relay on localhost:4443 (self-signed TLS). telemoq publisher emitting 8 tracks
-  simultaneously at aggregate ~3 MB/s &mdash; deliberately exceeding QUIC connection capacity to force congestion.
-  No artificial packet loss needed; BBR congestion control limits throughput and the scheduler must choose what to deliver.
+  <strong>Setup:</strong> 8 tracks at ~3 MB/s aggregate &mdash; exceeds QUIC connection capacity, forcing congestion. BBR limits throughput; the scheduler chooses what to deliver.
   <br><br>
-  <strong>Three modes, one variable:</strong>
-  <br>&bull; <code>default</code> &mdash; per-stream QUIC priority (P0&ndash;P20). High-priority tracks get bandwidth first.
-  <br>&bull; <code>--no-priority</code> &mdash; all tracks at priority 0. FIFO scheduling, no starvation. Like DDS topics on a shared bus.
-  <br>&bull; <code>--single-stream</code> &mdash; all tracks multiplexed into one QUIC stream. Head-of-line blocking. Like WebRTC/DTLS.
+  <strong>Three modes:</strong>
+  <code>default</code> = per-stream priority (P0&ndash;P20) &bull;
+  <code>--no-priority</code> = all priority 0 (DDS-like) &bull;
+  <code>--single-stream</code> = one QUIC stream (WebRTC-like HOL blocking)
   <br><br>
-  <strong>Each run:</strong> ~63 seconds, ~63 samples per track. Same binary. Same relay. Same payloads.
+  ~63 seconds per run. Same binary, same relay, same payloads.
 </div>
 
 <!-- ═══════ THREE-WAY BAR CHART ═══════ -->
@@ -268,17 +266,13 @@
 <!-- ═══════ KEY FINDING ═══════ -->
 
 <div class="insight">
-  <strong>Key finding: transport architecture determines whether your robot stays under control.</strong>
+  <strong>Transport architecture determines whether your robot stays under control.</strong>
   <br><br>
-  <strong>Priority (MoQ):</strong> The scheduler distributes capacity across P0&ndash;P5 tracks (3&ndash;5 msgs/s each),
-  completely blocking P10&ndash;P20 (pointcloud, video). Every safety-relevant track gets delivery. Total control: 22.2 msgs/s.
-  <br><br>
-  <strong>No-priority (DDS-like):</strong> Delivery becomes chaotic. Heartbeat drops 33%. Control/streaming goes to zero.
-  IMU goes to zero. Which tracks survive is arbitrary. Total control: 5.3 msgs/s &mdash; <strong style="color:#ef4444">76% loss vs priority.</strong>
-  <br><br>
-  <strong>Single-stream (WebRTC-like):</strong> Head-of-line blocking causes near-total blackout. All 8 tracks compete
-  for one ordered stream. Under congestion, essentially nothing gets through. Total control: 0.2 msgs/s &mdash;
-  <strong style="color:#ef4444">99% loss vs priority.</strong> The operator has lost the robot.
+  <strong>Priority:</strong> P0&ndash;P5 get 3&ndash;5 msgs/s each. Video/pointcloud starved to zero. Total control: 22.2 msgs/s.
+  <br>
+  <strong>No-priority:</strong> Delivery chaotic. Which tracks survive is arbitrary. Total control: 5.3 msgs/s &mdash; <strong style="color:#ef4444">76% loss.</strong>
+  <br>
+  <strong>Single-stream:</strong> Near-total blackout. Total control: 0.2 msgs/s &mdash; <strong style="color:#ef4444">99% loss.</strong>
 </div>
 
 <!-- ═══════ TELEOP SAFETY ═══════ -->
@@ -313,24 +307,18 @@
 <h2>How it works</h2>
 
 <div class="box">
-  <strong>Priority mode (default):</strong>
-  Each track maps to a separate QUIC stream. <code>Track.priority</code> &rarr; <code>stream.set_priority()</code> &rarr;
-  quinn's <code>BinaryHeap</code> scheduler sends high-priority streams first. P0 (heartbeat) always beats P20 (video).
-  <br><br>
-  <strong>No-priority mode (<code>--no-priority</code>):</strong>
-  All tracks still get separate QUIC streams, but all at priority 0. The BinaryHeap orders by group sequence only (FIFO).
-  No track is preferred &mdash; equivalent to DDS topics sharing a bus with no QoS differentiation.
-  <br><br>
-  <strong>Single-stream mode (<code>--single-stream</code>):</strong>
-  All 8 tracks multiplexed into one QUIC stream with 1-byte track index prefix. Any congestion on this single stream
-  blocks ALL data (head-of-line blocking). This is how WebRTC/DTLS data channels work &mdash; one ordered byte stream
-  for everything.
+  <strong>Priority:</strong> Each track = separate QUIC stream. <code>stream.set_priority()</code> &rarr; quinn's scheduler sends P0 first, P20 last.
+  <br>
+  <strong>No-priority:</strong> Separate streams, all priority 0. FIFO &mdash; no track preferred.
+  <br>
+  <strong>Single-stream:</strong> All tracks in one QUIC stream. One lost packet blocks everything (HOL blocking).
 </div>
 
-<div class="footer">
-  telemoq &mdash; MoQ transport for robotics teleoperation &middot;
+<div class="footer" style="text-align:left">
+  <a href="https://github.com/alltheseas/telemoq" style="color:var(--accent,#ffff05)">github.com/alltheseas/telemoq</a> &mdash; MoQ transport for robotics teleoperation &middot;
   built on <a href="https://github.com/moq-dev/moq">moq-dev/moq</a> &middot;
   measured 2026-03-02 &middot; localhost congestion stress test (~63s per mode)
+  <br><a href="telemoq-vs-webrtc.html" style="color:var(--accent,#ffff05)">&larr; back to demo</a>
 </div>
 
 <script>
