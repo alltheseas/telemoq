@@ -2,7 +2,9 @@
 
 > *"Build optimized, reliable data streaming protocols functioning over WiFi and cellular networks."*
 
-**[Live Demo: MoQ vs WebRTC vs DDS](https://alltheseas.github.io/telemoq/telemoq-vs-webrtc.html)** | **[Benchmark Results](https://alltheseas.github.io/telemoq/telemoq-benchmark.html)**
+**[Live Demo: MoQ vs WebRTC vs DDS](https://alltheseas.github.io/telemoq/telemoq-vs-webrtc.html)** | **[Video Walkthrough](https://github.com/alltheseas/telemoq/blob/9a695cea2403725a91ddd2325776bdc40ca8ff85/demotelemoq.mp4)** | **[Benchmark Results](https://alltheseas.github.io/telemoq/telemoq-benchmark.html)** 
+
+
 
 MoQ (Media over QUIC) transport for robotics teleoperation. Under congestion, high-priority control stays rock-steady while low-priority video degrades gracefully.
 
