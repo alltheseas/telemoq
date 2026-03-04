@@ -1,23 +1,18 @@
-# telemoq
+# telemoq – Priority-aware transport for robot teleoperation
 
-> *"Build optimized, reliable data streaming protocols functioning over WiFi and cellular networks."*
+**Problem** – In today's teleop stacks (WebRTC, DDS) *all* streams share a single ordered channel. When a video packet is lost, the whole link freezes (head-of-line blocking) and the robot can become uncontrollable.
 
-**[Live Demo: MoQ vs WebRTC vs DDS](https://alltheseas.github.io/telemoq/telemoq-vs-webrtc.html)** | **[Video Walkthrough](https://github.com/alltheseas/telemoq/blob/9a695cea2403725a91ddd2325776bdc40ca8ff85/demotelemoq.mp4)** | **[Benchmark Results](https://alltheseas.github.io/telemoq/telemoq-benchmark.html)** 
+**Solution** – **telemoq** builds on the IETF-standard **MoQ (Media over QUIC)** protocol. Each logical track (heartbeat, control, joint state, video, point cloud…) lives on its **own QUIC stream** with an explicit priority. Under bandwidth congestion the scheduler delivers high-priority control data first, while lower-priority video is gracefully degraded.
 
+**Impact** – In a realistic 300 kbps congested link the control loop stays **rock-steady (≈ 1 ms latency, 0% packet loss)**, whereas WebRTC drops to **≈ 0.2 msgs/s** for the same control stream. Video simply starves – the robot never loses control.
 
+> "Control data must never freeze." – IHMC DRC Lesson: 9,600 bps is enough for control; everything else is expendable.
 
-MoQ (Media over QUIC) transport for robotics teleoperation. Under congestion, high-priority control stays rock-steady while low-priority video degrades gracefully.
+[▶️ Live demo – MoQ vs WebRTC vs DDS](https://alltheseas.github.io/telemoq/telemoq-vs-webrtc.html) | [📹 Walk-through video (2 min)](./demotelemoq.mp4) | [Benchmark Results](https://alltheseas.github.io/telemoq/telemoq-benchmark.html)
+
+---
 
 Built on [moq-dev/moq](https://github.com/moq-dev/moq). MoQ is an [IETF standards-track protocol](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) over [QUIC (RFC 9000)](https://www.rfc-editor.org/rfc/rfc9000).
-
-### The Protocol Stack
-
-| Layer | Protocol | Role |
-|-------|----------|------|
-| **On-robot** | ROS2 / DDS, LCM | 1kHz IPC between controllers, sensors, actuators |
-| **WAN teleop** | **MoQ / QUIC** | Operator ↔ robot over WiFi/cellular. Priority-aware. *This is what telemoq demonstrates.* |
-
-The industry default for WAN teleop is WebRTC ([Polymath/LiveKit](https://livekit.io/customers/polymath), [Transitive](https://transitiverobotics.com/caps/transitive-robotics/webrtc-video/), [Viam](https://www.viam.com/post/real-time-robot-control-grpc-webrtc)). WebRTC's trade-off: all streams share one ordered channel, so a lost video packet stalls control data (head-of-line blocking). MoQ gives each track an independent QUIC stream with explicit priority.
 
 ## The Demo
 
