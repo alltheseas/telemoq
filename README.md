@@ -4,7 +4,7 @@
 
 **Solution** – **telemoq** builds on the IETF-standard **MoQ (Media over QUIC)** protocol. Each logical track (heartbeat, control, joint state, video, point cloud…) lives on its **own QUIC stream** with an explicit priority. Under bandwidth congestion the scheduler delivers high-priority control data first, while lower-priority video is gracefully degraded.
 
-**Impact** – In a realistic 300 kbps congested link the control loop stays **rock-steady (≈ 1 ms latency, 0% packet loss)**, whereas WebRTC drops to **≈ 0.2 msgs/s** for the same control stream. Video simply starves – the robot never loses control.
+**Impact** – In a realistic 300 kbps congested link the control loop stays **teady (≈ 1 ms latency, 0% packet loss)**, whereas WebRTC drops to **≈ 0.2 msgs/s** for the same control stream. Video simply starves – the robot never loses control.
 
 > "Control data must never freeze." – IHMC DRC Lesson: 9,600 bps is enough for control; everything else is expendable.
 
