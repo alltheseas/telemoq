@@ -134,6 +134,71 @@ Same binary, same relay, same payloads. Only the transport behavior changes. Add
 
 See [benchmark results](https://alltheseas.github.io/telemoq/telemoq-benchmark.html) for visual comparison.
 
+## DROID Dataset Replay
+
+Replay real robot telemetry from the [DROID dataset](https://droid-dataset.github.io/) (76k episodes, 7-DOF Franka Panda, 3 synchronized cameras) through the MoQ relay. This proves the priority scheduling works with real-world robotics data, not just synthetic payloads.
+
+### Quick Start (pre-baked sample)
+
+```bash
+# 1. Start relay (terminal 1)
+cd ../lumina-video/moq && cargo run --bin moq-relay -- --listen '[::]:4443' --tls-generate localhost --auth-public ''
+
+# 2. Publisher with DROID replay (terminal 2)
+cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast droid-1 --replay sample_data --all-cameras --loop-replay publish
+
+# 3. Subscriber (terminal 3)
+cargo run -- --url https://localhost:4443 --tls-disable-verify --broadcast droid-1 --replay --all-cameras subscribe
+
+# 4. Or open viewer.html in Chrome for live camera feeds + heartbeat indicator
+```
+
+### One-Command Demo
+
+```bash
+./scripts/demo.sh                # clean network
+./scripts/demo.sh --impair       # with bandwidth limiting (500 kbit/s default)
+./scripts/demo.sh --impair 300   # custom bandwidth limit
+```
+
+### Converting More Data
+
+To convert the full droid_100 dataset (100 episodes):
+
+```bash
+pip install -r scripts/requirements.txt
+python scripts/convert_droid.py --output droid_replay
+python scripts/convert_droid.py --output sample_data --episodes 3  # quick sample
+```
+
+### Replay Track Layout
+
+| Track | Priority | Rate | Source |
+|-------|----------|------|--------|
+| `safety/heartbeat` | P0 | 10 Hz | Synthetic (transport watchdog) |
+| `control/streaming` | P1 | 15 Hz | DROID action[7] |
+| `control/task_status` | P1 | 10 Hz | Synthetic |
+| `sensors/joints` | P2 | 15 Hz | DROID observation.state[7] |
+| `video/camera0` | P20 | 15 Hz | DROID wrist camera (JPEG) |
+| `video/camera1` | P20 | 15 Hz | DROID exterior camera 1 (JPEG) |
+| `video/camera2` | P20 | 15 Hz | DROID exterior camera 2 (JPEG) |
+
+### Network Impairment
+
+```bash
+./scripts/netem.sh start 500     # bandwidth limit: 500 kbit/s
+./scripts/netem.sh start 300 3 20  # 300 kbit/s + 3% loss + 20ms delay
+./scripts/netem.sh stop
+```
+
+### Web Viewer
+
+Open `viewer.html` in Chrome/Edge. It subscribes directly to the MoQ relay via WebTransport and displays live camera frames, joint position gauges, heartbeat indicator (green = alive, red = ESTOP TRIGGERED), and per-track delivery rates.
+
+### Integration Path
+
+MoQ runs as a transport layer alongside ROS2 DDS. A future `ros2_moq_bridge` node would publish `sensor_msgs/JointState` and `sensor_msgs/Image` as MoQ tracks with priority annotations. Zero changes to existing ROS2 nodes — the relay handles WAN traversal and priority scheduling transparently.
+
 ## Architecture
 
 - **Single binary** with `publish` / `subscribe` subcommands
