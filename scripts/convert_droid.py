@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Convert lerobot/droid_100 to flat replay format for telemoq.
 
+Downloads parquet telemetry and AV1 video from HuggingFace, extracts
+JPEG frames per camera, writes packed binary telemetry.
+
 Output structure:
   <output_dir>/
     meta.json
@@ -12,76 +15,25 @@ Output structure:
 
 Usage:
   pip install -r requirements.txt
-  python convert_droid.py --output ../droid_replay
-  python convert_droid.py --output ../droid_replay --episodes 3  # quick sample
+  python convert_droid.py --output ../sample_data --episodes 3
+  python convert_droid.py --output ../droid_replay              # all 100 episodes
 """
 
 import argparse
 import json
 import struct
-import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
+import pyarrow.parquet as pq
+from huggingface_hub import hf_hub_download
 
-
-def convert_episode(ds, episode_idx: int, output_dir: Path, camera_keys: list[str]):
-    """Convert a single episode to flat replay format."""
-    ep_dir = output_dir / f"episode_{episode_idx:03d}"
-
-    # Get frames for this episode
-    from_idx = ds.episode_data_index["from"][episode_idx].item()
-    to_idx = ds.episode_data_index["to"][episode_idx].item()
-    n_frames = to_idx - from_idx
-
-    # Write telemetry.bin
-    ep_dir.mkdir(parents=True, exist_ok=True)
-    telemetry_path = ep_dir / "telemetry.bin"
-    with open(telemetry_path, "wb") as f:
-        for i in range(from_idx, to_idx):
-            item = ds[i]
-            timestamp = item["timestamp"].item() if "timestamp" in item else (i - from_idx) / 15.0
-            state = item["observation.state"].numpy().astype(np.float32)
-            action = item["action"].numpy().astype(np.float32)
-            # Pad/truncate to 7 DOF
-            state_7 = np.zeros(7, dtype=np.float32)
-            action_7 = np.zeros(7, dtype=np.float32)
-            state_7[: min(len(state), 7)] = state[: min(len(state), 7)]
-            action_7[: min(len(action), 7)] = action[: min(len(action), 7)]
-            # Pack: 1 f32 timestamp + 7 f32 state + 7 f32 action = 60 bytes
-            f.write(struct.pack("<f", timestamp))
-            f.write(state_7.tobytes())
-            f.write(action_7.tobytes())
-
-    # Write camera frames as JPEG
-    for cam_idx, cam_key in enumerate(camera_keys):
-        cam_dir = ep_dir / f"camera{cam_idx}"
-        cam_dir.mkdir(parents=True, exist_ok=True)
-        for i in range(from_idx, to_idx):
-            item = ds[i]
-            if cam_key not in item:
-                break
-            frame_idx = i - from_idx
-            img = item[cam_key]
-            # Convert PIL/tensor to numpy
-            if hasattr(img, "numpy"):
-                img = img.numpy()
-            if hasattr(img, "convert"):
-                img = np.array(img)
-            # Ensure uint8 RGB
-            if img.dtype == np.float32 or img.dtype == np.float64:
-                img = (img * 255).clip(0, 255).astype(np.uint8)
-            # Convert channels-first (C,H,W) to channels-last (H,W,C) if needed
-            if img.ndim == 3 and img.shape[0] in (1, 3):
-                img = np.transpose(img, (1, 2, 0))
-            # Convert RGB to BGR for OpenCV
-            if img.ndim == 3 and img.shape[2] == 3:
-                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            out_path = cam_dir / f"{frame_idx:06d}.jpg"
-            cv2.imwrite(str(out_path), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-
-    return n_frames
+CAMERA_KEYS = [
+    "observation.images.wrist_image_left",
+    "observation.images.exterior_image_1_left",
+    "observation.images.exterior_image_2_left",
+]
 
 
 def main():
@@ -94,27 +46,83 @@ def main():
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading dataset {args.dataset}...")
-    from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+    repo = args.dataset
 
-    ds = LeRobotDataset(args.dataset)
+    # Download parquet data
+    print("Downloading parquet telemetry...")
+    parquet_path = hf_hub_download(repo, "data/chunk-000/file-000.parquet", repo_type="dataset")
 
-    # Discover camera keys
-    camera_keys = [k for k in ds.meta.camera_keys] if hasattr(ds.meta, "camera_keys") else []
-    if not camera_keys:
-        # Fallback: look for observation.images.* or observation.image* keys
-        camera_keys = sorted([k for k in ds.features if "image" in k.lower()])
-    print(f"Camera keys: {camera_keys}")
+    print("Reading telemetry...")
+    table = pq.read_table(parquet_path)
+    ep_indices = table.column("episode_index").to_pylist()
+    timestamps = table.column("timestamp").to_pylist()
+    states = table.column("observation.state").to_pylist()
+    actions = table.column("action").to_pylist()
 
-    n_episodes = ds.meta.total_episodes if hasattr(ds.meta, "total_episodes") else len(ds.episode_data_index["from"])
+    # Build episode boundary index
+    episode_ranges = {}
+    for i, ep_idx in enumerate(ep_indices):
+        if ep_idx not in episode_ranges:
+            episode_ranges[ep_idx] = [i, i]
+        episode_ranges[ep_idx][1] = i + 1
+
+    n_episodes = len(episode_ranges)
     if args.episodes is not None:
         n_episodes = min(args.episodes, n_episodes)
+    print(f"Found {len(episode_ranges)} episodes, converting {n_episodes}")
+
+    # Download video files
+    video_paths = {}
+    for cam_key in CAMERA_KEYS:
+        vpath = f"videos/{cam_key}/chunk-000/file-000.mp4"
+        print(f"Downloading {vpath}...")
+        video_paths[cam_key] = hf_hub_download(repo, vpath, repo_type="dataset")
 
     total_frames = 0
+
     for ep_idx in range(n_episodes):
-        n = convert_episode(ds, ep_idx, output_dir, camera_keys)
-        total_frames += n
-        print(f"  Episode {ep_idx:03d}: {n} frames")
+        from_row, to_row = episode_ranges[ep_idx]
+        n_frames = to_row - from_row
+        ep_dir = output_dir / f"episode_{ep_idx:03d}"
+        ep_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write telemetry.bin (60 bytes per frame)
+        tel_path = ep_dir / "telemetry.bin"
+        with open(tel_path, "wb") as f:
+            for row_idx in range(from_row, to_row):
+                ts = float(timestamps[row_idx])
+                state = np.array(states[row_idx], dtype=np.float32)
+                action = np.array(actions[row_idx], dtype=np.float32)
+                s7 = np.zeros(7, dtype=np.float32)
+                a7 = np.zeros(7, dtype=np.float32)
+                s7[: min(len(state), 7)] = state[: min(len(state), 7)]
+                a7[: min(len(action), 7)] = action[: min(len(action), 7)]
+                f.write(struct.pack("<f", ts))
+                f.write(s7.tobytes())
+                f.write(a7.tobytes())
+
+        # Extract video frames as JPEG
+        for cam_idx, cam_key in enumerate(CAMERA_KEYS):
+            cam_dir = ep_dir / f"camera{cam_idx}"
+            cam_dir.mkdir(parents=True, exist_ok=True)
+
+            cap = cv2.VideoCapture(video_paths[cam_key])
+            if not cap.isOpened():
+                print(f"  WARNING: Could not open video for {cam_key}")
+                continue
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, from_row)
+            for frame_i in range(n_frames):
+                ret, frame = cap.read()
+                if not ret:
+                    print(f"  WARNING: Failed to read frame {frame_i} from {cam_key}")
+                    break
+                out_path = cam_dir / f"{frame_i:06d}.jpg"
+                cv2.imwrite(str(out_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            cap.release()
+
+        total_frames += n_frames
+        print(f"  Episode {ep_idx:03d}: {n_frames} frames")
 
     # Write meta.json
     meta = {
@@ -122,8 +130,8 @@ def main():
         "episodes": n_episodes,
         "total_frames": total_frames,
         "dof": 7,
-        "dataset": args.dataset,
-        "camera_keys": camera_keys,
+        "dataset": repo,
+        "camera_keys": CAMERA_KEYS,
     }
     with open(output_dir / "meta.json", "w") as f:
         json.dump(meta, f, indent=2)

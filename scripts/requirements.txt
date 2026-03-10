@@ -1,4 +1,4 @@
-lerobot
-datasets
+huggingface-hub
+pyarrow
 opencv-python>=4.5
 numpy

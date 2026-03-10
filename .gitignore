@@ -2,3 +2,6 @@
 Cargo.lock
 *.csv
 !benchmarks/*.csv
+sample_data/
+droid_replay/
+scripts/.calibrated_bw
