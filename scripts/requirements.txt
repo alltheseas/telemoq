@@ -1,0 +1,4 @@
+lerobot
+datasets
+opencv-python>=4.5
+numpy
