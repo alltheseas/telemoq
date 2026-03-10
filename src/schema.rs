@@ -118,6 +118,46 @@ pub struct ForceTorque {
     pub torque: [f64; 3],  // Nm
 }
 
+// --- DROID replay data types ---
+
+/// DROID replay joint state: 7-DOF float32 positions from dataset.
+/// Distinct from JointState (which uses f64 and includes velocities).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DroidJointState {
+    pub timestamp_ms: u64,
+    pub positions: [f32; 7],
+}
+
+/// DROID replay action: 7-DOF float32 motor commands from dataset.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DroidAction {
+    pub timestamp_ms: u64,
+    pub commands: [f32; 7],
+}
+
+// --- Replay track layouts ---
+
+/// Track layout for DROID replay mode (wrist camera only).
+/// Omits force_torque, imu, pointcloud (not in DROID dataset).
+pub const REPLAY_TRACKS: &[TrackDef] = &[
+    TrackDef { name: "safety/heartbeat",    priority: 0,  rate_hz: 10, payload_bytes: 17,     label: "safety/heartbeat" },
+    TrackDef { name: "control/streaming",   priority: 1,  rate_hz: 15, payload_bytes: 36,     label: "control/action" },
+    TrackDef { name: "control/task_status", priority: 1,  rate_hz: 10, payload_bytes: 14,     label: "control/task_ack" },
+    TrackDef { name: "sensors/joints",      priority: 2,  rate_hz: 15, payload_bytes: 36,     label: "sensors/joints" },
+    TrackDef { name: "video/camera0",       priority: 20, rate_hz: 15, payload_bytes: 15_000, label: "video/wrist" },
+];
+
+/// Track layout for DROID replay mode with all 3 cameras.
+pub const REPLAY_TRACKS_ALL_CAMERAS: &[TrackDef] = &[
+    TrackDef { name: "safety/heartbeat",    priority: 0,  rate_hz: 10, payload_bytes: 17,     label: "safety/heartbeat" },
+    TrackDef { name: "control/streaming",   priority: 1,  rate_hz: 15, payload_bytes: 36,     label: "control/action" },
+    TrackDef { name: "control/task_status", priority: 1,  rate_hz: 10, payload_bytes: 14,     label: "control/task_ack" },
+    TrackDef { name: "sensors/joints",      priority: 2,  rate_hz: 15, payload_bytes: 36,     label: "sensors/joints" },
+    TrackDef { name: "video/camera0",       priority: 20, rate_hz: 15, payload_bytes: 15_000, label: "video/wrist" },
+    TrackDef { name: "video/camera1",       priority: 20, rate_hz: 15, payload_bytes: 15_000, label: "video/ext1" },
+    TrackDef { name: "video/camera2",       priority: 20, rate_hz: 15, payload_bytes: 15_000, label: "video/ext2" },
+];
+
 // --- Generators: deterministic sinusoidal, physically plausible ---
 
 /// Franka Panda joint limits (rad): [q_min, q_max] per joint
