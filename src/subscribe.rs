@@ -5,7 +5,7 @@ use anyhow::Context;
 use moq_lite::*;
 use url::Url;
 
-use crate::schema::{self, TRACKS};
+use crate::schema::{self, TrackDef};
 
 struct TrackStats {
     recv_count: AtomicU64,
@@ -39,6 +39,7 @@ pub async fn run(
     client: moq_native::Client,
     url: &Url,
     broadcast_name: &str,
+    tracks: &'static [TrackDef],
     csv: bool,
     no_priority: bool,
     single_stream: bool,
@@ -62,7 +63,7 @@ pub async fn run(
     tracing::info!("waiting for broadcast '{broadcast_name}' to come online...");
 
     // Create stats counters for each track
-    let stats: Vec<Arc<TrackStats>> = TRACKS.iter().map(|_| Arc::new(TrackStats::new())).collect();
+    let stats: Vec<Arc<TrackStats>> = tracks.iter().map(|_| Arc::new(TrackStats::new())).collect();
 
     let start = tokio::time::Instant::now();
 
@@ -71,7 +72,7 @@ pub async fn run(
     let display_broadcast = broadcast_name.to_string();
     let display_url = url.to_string();
     let display_handle = tokio::spawn(async move {
-        display_loop(&display_stats, &display_broadcast, &display_url, start, csv, no_priority, single_stream).await;
+        display_loop(&display_stats, &display_broadcast, &display_url, start, csv, no_priority, single_stream, tracks).await;
     });
 
     // Main event loop: wait for broadcasts, subscribe to tracks
@@ -88,29 +89,36 @@ pub async fn run(
                                 name: "multiplexed".to_string(),
                                 priority: 0,
                             };
-                            let consumer = broadcast.subscribe_track(&track_info);
-                            let all_stats: Vec<Arc<TrackStats>> = stats.iter().map(Arc::clone).collect();
-                            tokio::spawn(async move {
-                                if let Err(e) = read_muxed_track(consumer, &all_stats).await {
-                                    tracing::warn!(error = %e, "multiplexed track reader ended");
+                            match broadcast.subscribe_track(&track_info) {
+                                Ok(consumer) => {
+                                    let all_stats: Vec<Arc<TrackStats>> = stats.iter().map(Arc::clone).collect();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = read_muxed_track(consumer, &all_stats, tracks).await {
+                                            tracing::warn!(error = %e, "multiplexed track reader ended");
+                                        }
+                                    });
                                 }
-                            });
+                                Err(e) => tracing::warn!(error = %e, "failed to subscribe to multiplexed track"),
+                            }
                         } else {
                             // Normal mode: subscribe to each track individually
-                            for (i, def) in TRACKS.iter().enumerate() {
+                            for (i, def) in tracks.iter().enumerate() {
                                 let track_info = Track {
                                     name: def.name.to_string(),
                                     priority: def.priority,
                                 };
-                                let consumer = broadcast.subscribe_track(&track_info);
-                                let track_stats = stats[i].clone();
-                                let track_name = def.name;
-
-                                tokio::spawn(async move {
-                                    if let Err(e) = read_track(consumer, track_stats, track_name).await {
-                                        tracing::warn!(track = %track_name, error = %e, "track reader ended");
+                                match broadcast.subscribe_track(&track_info) {
+                                    Ok(consumer) => {
+                                        let track_stats = stats[i].clone();
+                                        let track_name = def.name;
+                                        tokio::spawn(async move {
+                                            if let Err(e) = read_track(consumer, track_stats, track_name).await {
+                                                tracing::warn!(track = %track_name, error = %e, "track reader ended");
+                                            }
+                                        });
                                     }
-                                });
+                                    Err(e) => tracing::warn!(track = %def.name, error = %e, "failed to subscribe"),
+                                }
                             }
                         }
                     }
@@ -130,7 +138,7 @@ pub async fn run(
 /// Tracks that use raw byte blobs with LE u64 timestamp in first 8 bytes
 /// (not bincode-serialized structs)
 fn is_raw_blob_track(name: &str) -> bool {
-    matches!(name, "video/camera0" | "perception/pointcloud")
+    matches!(name, "video/camera0" | "video/camera1" | "video/camera2" | "perception/pointcloud")
 }
 
 async fn read_track(
@@ -188,8 +196,9 @@ async fn read_track(
 async fn read_muxed_track(
     mut consumer: TrackConsumer,
     stats: &[Arc<TrackStats>],
+    tracks: &[TrackDef],
 ) -> anyhow::Result<()> {
-    let mut last_recv_times: Vec<Option<u64>> = vec![None; TRACKS.len()];
+    let mut last_recv_times: Vec<Option<u64>> = vec![None; tracks.len()];
 
     while let Some(mut group) = consumer.next_group().await? {
         while let Some(frame) = group.read_frame().await? {
@@ -198,7 +207,7 @@ async fn read_muxed_track(
             }
 
             let track_idx = frame[0] as usize;
-            if track_idx >= stats.len() || track_idx >= TRACKS.len() {
+            if track_idx >= stats.len() || track_idx >= tracks.len() {
                 continue;
             }
 
@@ -226,7 +235,7 @@ async fn read_muxed_track(
 
             // Extract timestamp and compute latency
             if payload.len() >= 8 {
-                let track_name = TRACKS[track_idx].name;
+                let track_name = tracks[track_idx].name;
                 let ts = if is_raw_blob_track(track_name) {
                     u64::from_le_bytes(payload[..8].try_into().unwrap())
                 } else {
@@ -255,6 +264,7 @@ async fn display_loop(
     csv: bool,
     no_priority: bool,
     single_stream: bool,
+    tracks: &[TrackDef],
 ) {
     let mode = if single_stream { "single-stream" } else if no_priority { "no-priority" } else { "priority" };
     if csv {
@@ -269,7 +279,7 @@ async fn display_loop(
         let elapsed = start.elapsed().as_secs();
 
         if csv {
-            for (i, def) in TRACKS.iter().enumerate() {
+            for (i, def) in tracks.iter().enumerate() {
                 let count = stats[i].recv_count.swap(0, Ordering::Relaxed);
                 let bytes = stats[i].recv_bytes.swap(0, Ordering::Relaxed);
                 let lat_sum = stats[i].latency_sum_ms.swap(0, Ordering::Relaxed);
@@ -307,7 +317,7 @@ async fn display_loop(
         println!("  ║ Track                │ Pri │ Recv/s  │ Expected │   Status   │ Latency │  Gap  │ Throughput            ║");
         println!("  ╟──────────────────────┼─────┼─────────┼──────────┼────────────┼─────────┼───────┼───────────────────────╢");
 
-        for (i, def) in TRACKS.iter().enumerate() {
+        for (i, def) in tracks.iter().enumerate() {
             let count = stats[i].recv_count.swap(0, Ordering::Relaxed);
             let bytes = stats[i].recv_bytes.swap(0, Ordering::Relaxed);
             let lat_sum = stats[i].latency_sum_ms.swap(0, Ordering::Relaxed);
@@ -385,6 +395,14 @@ async fn display_loop(
                             js.positions.iter().map(|p| format!("{:.2}", p)).collect();
                         println!(
                             "  ║   └─ joints: [{}] rad {:>30} ║",
+                            angles.join(", "),
+                            ""
+                        );
+                    } else if let Ok(djs) = bincode::deserialize::<crate::schema::DroidJointState>(payload) {
+                        let angles: Vec<String> =
+                            djs.positions.iter().map(|p| format!("{:.3}", p)).collect();
+                        println!(
+                            "  ║   └─ joints: [{}] {:>34} ║",
                             angles.join(", "),
                             ""
                         );

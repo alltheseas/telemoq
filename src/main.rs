@@ -6,13 +6,16 @@
 //! On-robot: ROS2/DDS handles 1kHz inter-process comms. LCM for lightweight messaging.
 //! WAN link: MoQ/QUIC with per-stream priority. This is the gap telemoq fills.
 //! Alternative to WebRTC (Polymath, Transitive, Viam) and DDS+SRT (IHMC) for the
-//! operator↔robot link over WiFi and cellular.
+//! operator<->robot link over WiFi and cellular.
+
+use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::Parser;
 use url::Url;
 
 mod publish;
+mod replay;
 mod schema;
 mod subscribe;
 
@@ -51,6 +54,19 @@ pub struct Config {
     /// Benchmark mode: simulates WebRTC-style head-of-line blocking.
     #[arg(long)]
     pub single_stream: bool,
+
+    /// Path to pre-processed DROID replay directory (enables replay mode).
+    /// Use scripts/convert_droid.py to prepare the data, or use sample_data/.
+    #[arg(long)]
+    pub replay: Option<PathBuf>,
+
+    /// Include all 3 cameras in replay mode (default: wrist camera only).
+    #[arg(long)]
+    pub all_cameras: bool,
+
+    /// Loop replay episodes continuously (default: true).
+    #[arg(long, default_value_t = true)]
+    pub loop_replay: bool,
 }
 
 #[derive(Parser, Clone)]
@@ -67,13 +83,53 @@ async fn main() -> anyhow::Result<()> {
     let client = config.client.init()?;
 
     match config.role {
-        Role::Publish => publish::run(client, &config.url, &config.broadcast, config.no_priority, config.single_stream)
-            .await
-            .context("publisher error"),
-        Role::Subscribe => {
-            subscribe::run(client, &config.url, &config.broadcast, config.csv, config.no_priority, config.single_stream)
+        Role::Publish => {
+            if let Some(ref replay_path) = config.replay {
+                publish::run_replay(
+                    client,
+                    &config.url,
+                    &config.broadcast,
+                    replay_path,
+                    config.all_cameras,
+                    config.loop_replay,
+                    config.no_priority,
+                    config.single_stream,
+                )
                 .await
-                .context("subscriber error")
+                .context("replay publisher error")
+            } else {
+                publish::run(
+                    client,
+                    &config.url,
+                    &config.broadcast,
+                    config.no_priority,
+                    config.single_stream,
+                )
+                .await
+                .context("publisher error")
+            }
+        }
+        Role::Subscribe => {
+            let tracks = if config.replay.is_some() {
+                if config.all_cameras {
+                    schema::REPLAY_TRACKS_ALL_CAMERAS
+                } else {
+                    schema::REPLAY_TRACKS
+                }
+            } else {
+                schema::TRACKS
+            };
+            subscribe::run(
+                client,
+                &config.url,
+                &config.broadcast,
+                tracks,
+                config.csv,
+                config.no_priority,
+                config.single_stream,
+            )
+            .await
+            .context("subscriber error")
         }
     }
 }
