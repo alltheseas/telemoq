@@ -88,7 +88,7 @@ pub async fn run(
                                 name: "multiplexed".to_string(),
                                 priority: 0,
                             };
-                            let consumer = broadcast.subscribe_track(&track_info);
+                            let consumer = broadcast.subscribe_track(&track_info)?;
                             let all_stats: Vec<Arc<TrackStats>> = stats.iter().map(Arc::clone).collect();
                             tokio::spawn(async move {
                                 if let Err(e) = read_muxed_track(consumer, &all_stats).await {
@@ -102,7 +102,7 @@ pub async fn run(
                                     name: def.name.to_string(),
                                     priority: def.priority,
                                 };
-                                let consumer = broadcast.subscribe_track(&track_info);
+                                let consumer = broadcast.subscribe_track(&track_info)?;
                                 let track_stats = stats[i].clone();
                                 let track_name = def.name;
 

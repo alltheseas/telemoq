@@ -47,7 +47,7 @@ pub async fn run(client: moq_native::Client, url: &Url, broadcast_name: &str, no
         let track = broadcast.create_track(Track {
             name: "multiplexed".to_string(),
             priority: 0,
-        });
+        })?;
         tracing::info!("created single multiplexed track (WebRTC HOL simulation)");
         mux_track = Some(track);
     } else {
@@ -56,7 +56,7 @@ pub async fn run(client: moq_native::Client, url: &Url, broadcast_name: &str, no
             let track = broadcast.create_track(Track {
                 name: def.name.to_string(),
                 priority,
-            });
+            })?;
             tracing::info!(track = %def.name, priority, rate_hz = def.rate_hz, "created track");
             track_producers.push(track);
         }
