@@ -73,17 +73,17 @@ impl BwFilter {
 }
 
 struct ShedState {
-    shed: [bool; 8],
-    shed_since: [Option<Instant>; 8],
-    thresholds: [u64; 8],
+    shed: [bool; TRACKS.len()],
+    shed_since: [Option<Instant>; TRACKS.len()],
+    thresholds: [u64; TRACKS.len()],
     bw_filter: BwFilter,
 }
 
 impl ShedState {
     fn new() -> Self {
         Self {
-            shed: [false; 8],
-            shed_since: [None; 8],
+            shed: [false; TRACKS.len()],
+            shed_since: [None; TRACKS.len()],
             thresholds: shed_thresholds(),
             bw_filter: BwFilter::new(),
         }
@@ -141,7 +141,7 @@ impl ShedState {
     }
 }
 
-/// Publish all 8 telemetry tracks at their configured rates.
+/// Publish all telemetry tracks at their configured rates.
 ///
 /// Connects to a MoQ relay, creates one QUIC stream per track (or a single
 /// multiplexed stream in `--single-stream` mode), and loops forever generating
@@ -245,6 +245,8 @@ pub async fn run(
     // 5: sensors/imu           P50  200 Hz
     // 6: perception/pointcloud P10    5 Hz
     // 7: video/camera0         P1    30 Hz
+    // 8: video/camera1         P1    30 Hz
+    // 9: video/camera2         P1    30 Hz
 
     let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_millis(100));   // 10 Hz
     let mut streaming_interval = tokio::time::interval(std::time::Duration::from_millis(6));     // ~167 Hz
@@ -254,6 +256,8 @@ pub async fn run(
     let mut imu_interval = tokio::time::interval(std::time::Duration::from_millis(5));           // 200 Hz
     let mut pointcloud_interval = tokio::time::interval(std::time::Duration::from_millis(200));  // 5 Hz
     let mut video_interval = tokio::time::interval(std::time::Duration::from_millis(33));        // ~30 Hz
+    let mut video1_interval = tokio::time::interval(std::time::Duration::from_millis(33));       // ~30 Hz
+    let mut video2_interval = tokio::time::interval(std::time::Duration::from_millis(33));       // ~30 Hz
 
     let mut heartbeat_seq: u64 = 0;
 
@@ -266,7 +270,7 @@ pub async fn run(
     } else {
         "priority"
     };
-    tracing::info!("publishing started — all 8 tracks active (IHMC KST-aligned), mode={mode}");
+    tracing::info!("publishing started — all {} tracks active (IHMC KST-aligned), mode={mode}", TRACKS.len());
 
     tokio::select! {
         res = session.closed() => res.context("session closed"),
@@ -343,6 +347,22 @@ pub async fn run(
                             let mut frame = vec![0u8; 50_000];
                             frame[..8].copy_from_slice(&ts.to_le_bytes());
                             emit_frame(&mut mux_track, &mut track_producers, 7, frame);
+                        }
+                    }
+                    _ = video1_interval.tick() => {
+                        if shed_state.should_emit(8, bw_estimate) {
+                            let ts = now_ms();
+                            let mut frame = vec![0u8; 50_000];
+                            frame[..8].copy_from_slice(&ts.to_le_bytes());
+                            emit_frame(&mut mux_track, &mut track_producers, 8, frame);
+                        }
+                    }
+                    _ = video2_interval.tick() => {
+                        if shed_state.should_emit(9, bw_estimate) {
+                            let ts = now_ms();
+                            let mut frame = vec![0u8; 50_000];
+                            frame[..8].copy_from_slice(&ts.to_le_bytes());
+                            emit_frame(&mut mux_track, &mut track_producers, 9, frame);
                         }
                     }
                 }
