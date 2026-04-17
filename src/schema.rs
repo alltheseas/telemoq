@@ -18,7 +18,7 @@ pub fn now_ms() -> u64 {
 //              IHMC uses DDS + SRT (two protocols, no cross-protocol priority).
 //   telemoq:   Single QUIC connection, per-stream priority. Video degrades gracefully.
 
-/// Track definition: name, priority (lower = higher), publish rate Hz, expected payload bytes.
+/// Track definition: name, priority (higher = higher in MoQ), publish rate Hz, expected payload bytes.
 pub struct TrackDef {
     pub name: &'static str,
     pub priority: u8,
@@ -30,27 +30,29 @@ pub struct TrackDef {
 
 // IHMC-informed track hierarchy (validated against DRC & KST architecture):
 //
-// P0  — Safety: watchdog heartbeat. Absence = connection lost → robot safe mode.
-// P1  — Control: SE3 pose targets (KST streaming at 167Hz) + task acknowledgments.
-// P2  — Sensors/joints: 100Hz joint state for operator situational awareness.
-// P3  — Sensors/force_torque: 100Hz contact detection for weld monitoring.
-// P5  — Sensors/imu: 200Hz orientation/accel. First to degrade under congestion.
-// P10 — Perception: downsampled point cloud for 3D world model.
-// P20 — Video: camera feed. Lowest priority — starved first under congestion.
+// MoQ priority: higher value = scheduled first by QUIC stream scheduler.
+//
+// P255 — Safety: watchdog heartbeat. Absence = connection lost → robot safe mode.
+// P200 — Control: SE3 pose targets (KST streaming at 167Hz) + task acknowledgments.
+// P150 — Sensors/joints: 100Hz joint state for operator situational awareness.
+// P100 — Sensors/force_torque: 100Hz contact detection for weld monitoring.
+// P50  — Sensors/imu: 200Hz orientation/accel. First to degrade under congestion.
+// P10  — Perception: downsampled point cloud for 3D world model.
+// P1   — Video: camera feed. Lowest priority — starved first under congestion.
 //
 // Key insight from IHMC DRC: 9,600 bps was sufficient for control.
 // The robot's onboard 1kHz QP controller handles low-level execution.
 // The teleop link carries high-level task goals, not raw joint commands.
 
 pub const TRACKS: &[TrackDef] = &[
-    TrackDef { name: "safety/heartbeat",      priority: 0,  rate_hz: 10,  payload_bytes: 17,     label: "safety/heartbeat" },
-    TrackDef { name: "control/streaming",     priority: 1,  rate_hz: 167, payload_bytes: 160,    label: "control/streaming" },
-    TrackDef { name: "control/task_status",   priority: 1,  rate_hz: 10,  payload_bytes: 14,     label: "control/task_ack" },
-    TrackDef { name: "sensors/joints",        priority: 2,  rate_hz: 100, payload_bytes: 120,    label: "sensors/joints" },
-    TrackDef { name: "sensors/force_torque",  priority: 3,  rate_hz: 100, payload_bytes: 56,     label: "sensors/force_torque" },
-    TrackDef { name: "sensors/imu",           priority: 5,  rate_hz: 200, payload_bytes: 88,     label: "sensors/imu" },
-    TrackDef { name: "perception/pointcloud", priority: 10, rate_hz: 5,   payload_bytes: 50_000, label: "perception/ptcloud" },
-    TrackDef { name: "video/camera0",         priority: 20, rate_hz: 30,  payload_bytes: 50_000, label: "video/camera0" },
+    TrackDef { name: "safety/heartbeat",      priority: 255, rate_hz: 10,  payload_bytes: 17,     label: "safety/heartbeat" },
+    TrackDef { name: "control/streaming",     priority: 200, rate_hz: 167, payload_bytes: 160,    label: "control/streaming" },
+    TrackDef { name: "control/task_status",   priority: 200, rate_hz: 10,  payload_bytes: 14,     label: "control/task_ack" },
+    TrackDef { name: "sensors/joints",        priority: 150, rate_hz: 100, payload_bytes: 120,    label: "sensors/joints" },
+    TrackDef { name: "sensors/force_torque",  priority: 100, rate_hz: 100, payload_bytes: 56,     label: "sensors/force_torque" },
+    TrackDef { name: "sensors/imu",           priority: 50,  rate_hz: 200, payload_bytes: 88,     label: "sensors/imu" },
+    TrackDef { name: "perception/pointcloud", priority: 10,  rate_hz: 5,   payload_bytes: 50_000, label: "perception/ptcloud" },
+    TrackDef { name: "video/camera0",         priority: 1,   rate_hz: 30,  payload_bytes: 50_000, label: "video/camera0" },
 ];
 
 // --- Data types ---
@@ -369,10 +371,11 @@ mod tests {
 
     #[test]
     fn track_definitions_are_sorted_by_priority() {
+        // MoQ: higher value = higher priority. TRACKS listed highest-first (descending).
         for window in TRACKS.windows(2) {
             assert!(
-                window[0].priority <= window[1].priority,
-                "TRACKS not sorted by priority: {} (P{}) > {} (P{})",
+                window[0].priority >= window[1].priority,
+                "TRACKS not sorted by priority (descending): {} (P{}) < {} (P{})",
                 window[0].name, window[0].priority, window[1].name, window[1].priority,
             );
         }
