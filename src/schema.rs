@@ -23,9 +23,36 @@ pub struct TrackDef {
     pub name: &'static str,
     pub priority: u8,
     pub rate_hz: u32,
-    #[allow(dead_code)]
     pub payload_bytes: usize,
     pub label: &'static str,
+}
+
+impl TrackDef {
+    /// Nominal bitrate in bits per second: rate_hz × payload_bytes × 8.
+    pub const fn bitrate_bps(&self) -> u64 {
+        self.rate_hz as u64 * self.payload_bytes as u64 * 8
+    }
+}
+
+/// Minimum bandwidth (bps) to keep each track active.
+/// For track `i`, this is the cumulative bitrate of all tracks with priority >= TRACKS[i].priority.
+/// Index 0 (safety/heartbeat) returns 0 — never shed.
+pub fn shed_thresholds() -> [u64; 8] {
+    let mut thresholds = [0u64; 8];
+    let mut i = 1; // skip index 0: never shed safety
+    while i < TRACKS.len() {
+        let mut cumulative = 0u64;
+        let mut j = 0;
+        while j < TRACKS.len() {
+            if TRACKS[j].priority >= TRACKS[i].priority {
+                cumulative += TRACKS[j].bitrate_bps();
+            }
+            j += 1;
+        }
+        thresholds[i] = cumulative;
+        i += 1;
+    }
+    thresholds
 }
 
 // IHMC-informed track hierarchy (validated against DRC & KST architecture):
@@ -384,5 +411,34 @@ mod tests {
     #[test]
     fn track_count_matches_expected() {
         assert_eq!(TRACKS.len(), 8, "expected 8 tracks (IHMC KST hierarchy)");
+    }
+
+    #[test]
+    fn bitrate_bps_matches_expected() {
+        // safety/heartbeat: 10 Hz × 17 B × 8 = 1,360 bps
+        assert_eq!(TRACKS[0].bitrate_bps(), 1_360);
+        // control/streaming: 167 Hz × 160 B × 8 = 213,760 bps
+        assert_eq!(TRACKS[1].bitrate_bps(), 213_760);
+        // video/camera0: 30 Hz × 50,000 B × 8 = 12,000,000 bps
+        assert_eq!(TRACKS[7].bitrate_bps(), 12_000_000);
+    }
+
+    #[test]
+    fn shed_thresholds_are_correct() {
+        let t = shed_thresholds();
+        // Index 0 (safety) = 0 — never shed
+        assert_eq!(t[0], 0);
+        // Index 1 (control/streaming P200): cumulative of P>=200 tracks
+        // = heartbeat(1360) + streaming(213760) + task_status(11200) = 226,320
+        let control_cumulative = TRACKS[0].bitrate_bps() + TRACKS[1].bitrate_bps() + TRACKS[2].bitrate_bps();
+        assert_eq!(t[1], control_cumulative);
+        assert_eq!(t[2], control_cumulative); // same priority as streaming
+        // Index 7 (video P1): cumulative of ALL tracks
+        let total: u64 = TRACKS.iter().map(|t| t.bitrate_bps()).sum();
+        assert_eq!(t[7], total);
+        // Thresholds are monotonically non-decreasing (lower priority = higher threshold)
+        for i in 1..t.len() {
+            assert!(t[i] >= t[i - 1], "threshold[{i}]={} < threshold[{}]={}", t[i], i - 1, t[i - 1]);
+        }
     }
 }

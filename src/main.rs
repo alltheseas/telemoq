@@ -51,6 +51,15 @@ pub struct Config {
     /// Benchmark mode: simulates WebRTC-style head-of-line blocking.
     #[arg(long)]
     pub single_stream: bool,
+
+    /// Disable publisher-side track shedding (publisher only).
+    /// When shedding is active, low-priority tracks are dropped when bandwidth is scarce.
+    #[arg(long)]
+    pub no_shed: bool,
+
+    /// Log QUIC congestion controller bandwidth estimate every second (publisher only).
+    #[arg(long)]
+    pub log_bandwidth: bool,
 }
 
 #[derive(Parser, Clone)]
@@ -67,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
     let client = config.client.init()?;
 
     match config.role {
-        Role::Publish => publish::run(client, &config.url, &config.broadcast, config.no_priority, config.single_stream)
+        Role::Publish => publish::run(client, &config.url, &config.broadcast, config.no_priority, config.single_stream, config.no_shed, config.log_bandwidth)
             .await
             .context("publisher error"),
         Role::Subscribe => {
