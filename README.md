@@ -92,7 +92,9 @@ cargo build
 **Terminal 1: Start the relay**
 
 ```bash
-cd ../lumina-video/moq && cargo run --bin moq-relay -- --listen '[::]:4443' --tls-generate localhost --auth-public ''
+cd ../lumina-video/moq && cargo run --release --bin moq-relay -- \
+  --tls-generate localhost --auth-public "" \
+  --server-bind '[::]:4443' --web-http-listen 0.0.0.0:4443
 ```
 
 **Terminal 2: Publisher**
@@ -133,6 +135,72 @@ Same binary, same relay, same payloads. Only the transport behavior changes. Add
 - **Single-stream (WebRTC-like):** Control: 0.2 msgs/s (99% loss). Near-total blackout.
 
 See [benchmark results](https://alltheseas.github.io/telemoq/telemoq-benchmark.html) for visual comparison.
+
+## Fleet Demo: DROID Dataset Replay
+
+Replay real [DROID](https://droid-dataset.github.io/) robot manipulation data (Franka Panda, 3 cameras, 7-DOF joints) as a multi-robot fleet through the browser viewer.
+
+### Prerequisites
+
+The `sample_data/` directory must exist with converted DROID episodes (see `scripts/convert_droid.py`). The included sample has 3 episodes, 546 frames, 3 cameras per frame.
+
+### Run (3-robot fleet)
+
+**Terminal 1: Relay**
+
+```bash
+cd ../lumina-video/moq && cargo run --release --bin moq-relay -- \
+  --tls-generate localhost --auth-public "" \
+  --server-bind '[::]:4443' --web-http-listen 0.0.0.0:4443
+```
+
+**Terminals 2-4: Publishers** (one per robot)
+
+```bash
+cargo run --release -- --url https://localhost:4443 --tls-disable-verify \
+  --broadcast robot-1 --replay sample_data --all-cameras --no-shed publish
+
+cargo run --release -- --url https://localhost:4443 --tls-disable-verify \
+  --broadcast robot-2 --replay sample_data --all-cameras --no-shed publish
+
+cargo run --release -- --url https://localhost:4443 --tls-disable-verify \
+  --broadcast robot-3 --replay sample_data --all-cameras --no-shed publish
+```
+
+**Browser: Fleet Viewer**
+
+Open `viewer.html` in **Chromium** (not Safari — Safari's WebTransport with self-signed certs is broken). Set Robots to `3`, click Connect.
+
+The viewer shows:
+- Live camera grid with per-robot wrist/exterior camera switching
+- Real 7-DOF Franka joint positions
+- Per-track stats (heartbeat, joints, cameras)
+- Heartbeat watchdog (green/red dot)
+
+Each publisher replays the same dataset but episodes are offset in time, so each robot shows different frames.
+
+### Remote Publisher (over WiFi)
+
+To publish from a remote machine (e.g., an on-robot computer):
+
+```bash
+# Copy source and data to the remote machine
+scp src/*.rs user@robot:~/telemoq/src/
+scp Cargo.toml user@robot:~/telemoq/
+scp -r sample_data user@robot:~/telemoq/
+
+# Build and run on the remote machine
+ssh user@robot "cd ~/telemoq && cargo build --release"
+ssh user@robot "cd ~/telemoq && ./target/release/telemoq \
+  --url https://<relay-ip>:4443 --tls-disable-verify \
+  --broadcast robot-1 --replay sample_data --all-cameras --no-shed publish"
+```
+
+### Fleet Stress Test (N robots)
+
+```bash
+./fleet-test-pub.sh 10 https://<relay-ip>:4443 --replay sample_data --all-cameras
+```
 
 ## Architecture
 
