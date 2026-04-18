@@ -43,6 +43,7 @@ fn emit_frame(
 const RESTORE_HEADROOM: f64 = 1.5;
 const MIN_SHED_DURATION: Duration = Duration::from_secs(5);
 const BW_WINDOW: Duration = Duration::from_secs(5);
+const SHED_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 /// Sliding-minimum bandwidth filter.
 /// Tracks (timestamp, bw) samples and returns the minimum over the last BW_WINDOW.
@@ -78,6 +79,7 @@ struct ShedState {
     shed_since: [Option<Instant>; TRACKS.len()],
     thresholds: [u64; TRACKS.len()],
     bw_filter: BwFilter,
+    connected_at: Instant,
 }
 
 impl ShedState {
@@ -87,15 +89,20 @@ impl ShedState {
             shed_since: [None; TRACKS.len()],
             thresholds: shed_thresholds(),
             bw_filter: BwFilter::new(),
+            connected_at: Instant::now(),
         }
     }
 
     /// Returns true if track `idx` should emit a frame given the current bandwidth estimate.
     /// Safety (idx 0) is never shed. If no estimate is available, all tracks emit.
+    /// During the grace period after (re)connect, all tracks emit to let CC stabilize.
     fn should_emit(&mut self, idx: usize, bw: Option<u64>) -> bool {
         if idx == 0 {
             return true;
         } // never shed safety
+        if self.connected_at.elapsed() < SHED_GRACE_PERIOD {
+            return true;
+        } // grace period after (re)connect
         let Some(raw_bw) = bw else {
             return true;
         }; // no estimate = emit everything

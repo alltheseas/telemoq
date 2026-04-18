@@ -8,6 +8,8 @@
 //! Alternative to WebRTC (Polymath, Transitive, Viam) and DDS+SRT (IHMC) for the
 //! operator↔robot link over WiFi and cellular.
 
+use std::time::{Duration, Instant};
+
 use anyhow::Context;
 use clap::Parser;
 use url::Url;
@@ -70,6 +72,11 @@ pub struct Config {
     /// Publish all 3 cameras (default: camera0 only). Only used with --replay.
     #[arg(long)]
     pub all_cameras: bool,
+
+    /// Disable auto-reconnect on connection loss.
+    /// By default, telemoq reconnects with jittered exponential backoff.
+    #[arg(long)]
+    pub no_reconnect: bool,
 }
 
 #[derive(Parser, Clone)]
@@ -78,12 +85,9 @@ pub enum Role {
     Subscribe,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let config = Config::parse();
-    config.log.init();
-
-    let client = config.client.init()?;
+/// Run a single publish or subscribe session. Returns when the session ends.
+async fn run_session(config: &Config) -> anyhow::Result<()> {
+    let client = config.client.clone().init()?;
 
     match config.role {
         Role::Publish => {
@@ -111,6 +115,96 @@ async fn main() -> anyhow::Result<()> {
             subscribe::run(client, &config.url, &config.broadcast, config.csv, config.no_priority, config.single_stream)
                 .await
                 .context("subscriber error")
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let config = Config::parse();
+    config.log.init();
+
+    if config.no_reconnect {
+        return run_session(&config).await;
+    }
+
+    // Reconnect loop with jittered exponential backoff.
+    // Defends against WiFi/cellular dropouts that kill the QUIC connection.
+    let mut attempt: u32 = 0;
+    let mut rapid_failures: u32 = 0;
+    let mut delay = Duration::from_secs(1);
+    let max_delay = Duration::from_secs(30);
+    // Sessions lasting < 2s are "rapid failures" — likely misconfiguration, not WiFi dropout
+    let rapid_failure_threshold = Duration::from_secs(2);
+    let max_rapid_failures: u32 = 3;
+
+    loop {
+        attempt += 1;
+        let session_start = Instant::now();
+
+        tracing::info!(attempt, "connecting to {}", config.url);
+
+        match run_session(&config).await {
+            Ok(()) => {
+                tracing::info!(
+                    attempt,
+                    session_duration_s = session_start.elapsed().as_secs(),
+                    "session ended cleanly"
+                );
+                break Ok(());
+            }
+            Err(e) => {
+                let session_duration = session_start.elapsed();
+                let rapid = session_duration < rapid_failure_threshold;
+
+                tracing::warn!(
+                    attempt,
+                    session_duration_ms = session_duration.as_millis() as u64,
+                    error = %e,
+                    rapid_failure = rapid,
+                    "session lost — will reconnect"
+                );
+
+                if rapid {
+                    rapid_failures += 1;
+                } else {
+                    rapid_failures = 0;
+                }
+
+                // Misconfiguration guard: if sessions keep dying immediately, stop spinning
+                if rapid_failures >= max_rapid_failures {
+                    tracing::error!(
+                        attempt,
+                        rapid_failures,
+                        "aborting: {} consecutive rapid failures (< {}s each) — likely misconfiguration (wrong URL, bad cert, relay down)",
+                        rapid_failures,
+                        rapid_failure_threshold.as_secs()
+                    );
+                    break Err(e.context("too many rapid failures — check URL and relay"));
+                }
+
+                // Reset backoff after a session that ran long enough to be "real"
+                if !rapid {
+                    delay = Duration::from_secs(1);
+                }
+
+                // Jitter: delay + random(0..delay/2) prevents thundering herd
+                let jitter = Duration::from_millis(
+                    rand::random::<u64>() % (delay.as_millis() as u64 / 2).max(1)
+                );
+                let sleep_duration = delay + jitter;
+
+                tracing::info!(
+                    delay_ms = sleep_duration.as_millis() as u64,
+                    next_attempt = attempt + 1,
+                    "backing off before reconnect"
+                );
+
+                tokio::time::sleep(sleep_duration).await;
+
+                // Exponential backoff (capped)
+                delay = (delay * 2).min(max_delay);
+            }
         }
     }
 }
