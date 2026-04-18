@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>telemoq fleet viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f; color: #e0e0e8;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+  }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px; background: #12121a; border-bottom: 1px solid #2a2a3a;
+  }
+  header h1 { font-size: 16px; font-weight: 600; letter-spacing: 2px; }
+  header h1 span { color: #448aff; }
+
+  .controls {
+    display: flex; gap: 8px; align-items: center;
+  }
+  .controls input, .controls select {
+    background: #1a1a2a; color: #e0e0e8; border: 1px solid #3a3a4a;
+    padding: 4px 8px; border-radius: 4px; font-family: inherit; font-size: 12px;
+  }
+  .controls input:focus { border-color: #448aff; outline: none; }
+  .controls button {
+    background: #448aff; color: #fff; border: none; padding: 6px 16px;
+    border-radius: 4px; cursor: pointer; font-family: inherit; font-weight: 600;
+  }
+  .controls button:hover { background: #5a9aff; }
+  .controls button.disconnect { background: #ff4444; }
+  .controls button.disconnect:hover { background: #ff6666; }
+  .controls label { color: #888; font-size: 11px; }
+
+  .status-bar {
+    display: flex; gap: 16px; padding: 4px 16px; background: #0e0e16;
+    border-bottom: 1px solid #1a1a2a; font-size: 11px; color: #666;
+  }
+  .status-bar .connected { color: #4caf50; }
+  .status-bar .error { color: #ff4444; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 4px; padding: 4px;
+  }
+
+  .robot-cell {
+    position: relative; background: #111118; border: 1px solid #2a2a3a;
+    border-radius: 4px; overflow: hidden; aspect-ratio: 16/10;
+  }
+  .robot-cell.focused {
+    grid-column: span 2; grid-row: span 2;
+  }
+  .robot-cell img {
+    width: 100%; height: 100%; object-fit: contain; display: block;
+    background: #0a0a0f;
+  }
+  .robot-cell .no-video {
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 100%; color: #333; font-size: 14px;
+  }
+
+  .robot-overlay {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 10px; background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, transparent 100%);
+    pointer-events: none;
+  }
+  .robot-name { font-weight: 600; font-size: 13px; }
+
+  .robot-stats {
+    display: flex; gap: 8px; align-items: center; font-size: 11px;
+  }
+
+  .heartbeat-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: #333;
+    display: inline-block;
+  }
+  .heartbeat-dot.alive { background: #4caf50; box-shadow: 0 0 4px #4caf50; }
+  .heartbeat-dot.dead { background: #ff4444; animation: pulse-red 0.5s infinite; }
+
+  @keyframes pulse-red {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .robot-bottom {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    padding: 6px 10px; background: linear-gradient(0deg, rgba(0,0,0,0.7) 0%, transparent 100%);
+    pointer-events: none; font-size: 11px; color: #aaa;
+    display: flex; justify-content: space-between;
+  }
+  .robot-bottom .joints {
+    max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .track-table {
+    margin: 8px; border-collapse: collapse; width: calc(100% - 16px);
+    font-size: 11px; display: none;
+  }
+  .track-table.visible { display: table; }
+  .track-table th {
+    text-align: left; padding: 4px 8px; color: #666;
+    border-bottom: 1px solid #2a2a3a;
+  }
+  .track-table td {
+    padding: 3px 8px; border-bottom: 1px solid #1a1a2a;
+  }
+  .track-table .ok { color: #4caf50; }
+  .track-table .degraded { color: #ff9800; }
+  .track-table .dead { color: #ff4444; }
+
+  footer {
+    padding: 8px 16px; text-align: center; color: #444; font-size: 11px;
+    border-top: 1px solid #1a1a2a;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1><span>TELEMOQ</span> FLEET</h1>
+    <div class="controls">
+      <label>Relay</label>
+      <input id="relay-url" type="text" value="http://localhost:4443" style="width:180px"
+             placeholder="http://localhost:4443">
+      <label>Robots</label>
+      <input id="num-robots" type="number" value="1" min="1" max="20" style="width:50px">
+      <label>Camera</label>
+      <select id="camera-select">
+        <option value="0">cam0 (wrist)</option>
+        <option value="1">cam1 (exterior L)</option>
+        <option value="2">cam2 (exterior R)</option>
+      </select>
+      <button id="connect-btn" onclick="toggleConnect()">Connect</button>
+      <label><input type="checkbox" id="show-stats" onchange="toggleStats()"> Stats</label>
+    </div>
+  </header>
+  <div class="status-bar">
+    <span id="status-text">Disconnected</span>
+    <span id="aggregate-stats"></span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <table class="track-table" id="track-table">
+    <thead>
+      <tr><th>Robot</th><th>Track</th><th>Pri</th><th>Recv/s</th><th>Expected</th><th>%</th><th>Latency</th><th>Throughput</th></tr>
+    </thead>
+    <tbody id="track-tbody"></tbody>
+  </table>
+
+  <div id="error-log" style="padding:8px 16px;font-size:11px;color:#ff9800;max-height:120px;overflow-y:auto;border-top:1px solid #2a2a3a;"></div>
+
+  <footer>
+    telemoq fleet viewer &mdash; MoQ/QUIC priority-aware teleop transport
+    &mdash; IHMC DRC: 9,600 bps was enough for control
+  </footer>
+
+<script type="module">
+import * as Moq from 'https://esm.sh/@moq/lite@0.2.1';
+
+const TRACKS = [
+  { name: 'safety/heartbeat',      priority: 255, rate: 10 },
+  { name: 'control/streaming',     priority: 200, rate: 167 },
+  { name: 'control/task_status',   priority: 200, rate: 10 },
+  { name: 'sensors/joints',        priority: 150, rate: 100 },
+  { name: 'sensors/force_torque',  priority: 100, rate: 100 },
+  { name: 'sensors/imu',           priority: 50,  rate: 200 },
+  { name: 'perception/pointcloud', priority: 10,  rate: 5 },
+  { name: 'video/camera0',         priority: 1,   rate: 30 },
+  { name: 'video/camera1',         priority: 1,   rate: 30 },
+  { name: 'video/camera2',         priority: 1,   rate: 30 },
+];
+
+let connection = null;
+let robots = {};
+
+class RobotState {
+  constructor(id, cellEl) {
+    this.id = id;
+    this.cellEl = cellEl;
+    this.imgEl = cellEl.querySelector('img');
+    this.heartbeatDot = cellEl.querySelector('.heartbeat-dot');
+    this.fpsEl = cellEl.querySelector('.fps');
+    this.jointsEl = cellEl.querySelector('.joints');
+    this.throughputEl = cellEl.querySelector('.throughput');
+    this.lastHeartbeat = 0;
+    this.blobUrl = null;
+    this.tracks = {};
+    for (const def of TRACKS) {
+      this.tracks[def.name] = { count: 0, bytes: 0, latencySum: 0, latencyCount: 0 };
+    }
+  }
+
+  updateHeartbeat(data) {
+    this.lastHeartbeat = Date.now();
+    this.tracks['safety/heartbeat'].count++;
+    this.tracks['safety/heartbeat'].bytes += data.byteLength;
+    // Parse: u64 timestamp_ms (LE bincode) + u64 sequence + bool estop
+    if (data.byteLength >= 8) {
+      const view = new DataView(data.buffer, data.byteOffset, 8);
+      const ts = Number(view.getBigUint64(0, true));
+      if (ts > 0) {
+        const latency = Date.now() - ts;
+        if (latency >= 0 && latency < 10000) {
+          this.tracks['safety/heartbeat'].latencySum += latency;
+          this.tracks['safety/heartbeat'].latencyCount++;
+        }
+      }
+    }
+  }
+
+  updateCamera(trackName, data) {
+    const stats = this.tracks[trackName];
+    if (!stats) return;
+    stats.count++;
+    stats.bytes += data.byteLength;
+
+    // Frame format: 8-byte LE u64 timestamp + JPEG payload
+    if (data.byteLength > 8) {
+      const view = new DataView(data.buffer, data.byteOffset, 8);
+      const ts = Number(view.getBigUint64(0, true));
+      if (ts > 0) {
+        const latency = Date.now() - ts;
+        if (latency >= 0 && latency < 10000) {
+          stats.latencySum += latency;
+          stats.latencyCount++;
+        }
+      }
+
+      // Only render if this is the selected camera
+      const selectedCam = document.getElementById('camera-select').value;
+      if (trackName === `video/camera${selectedCam}`) {
+        const jpegBytes = data.slice(8);
+        const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+        const url = URL.createObjectURL(blob);
+        if (this.blobUrl) URL.revokeObjectURL(this.blobUrl);
+        this.blobUrl = url;
+        this.imgEl.src = url;
+        this.imgEl.style.display = 'block';
+        this.cellEl.querySelector('.no-video').style.display = 'none';
+      }
+    }
+  }
+
+  updateTelemetry(trackName, data) {
+    const stats = this.tracks[trackName];
+    if (!stats) return;
+    stats.count++;
+    stats.bytes += data.byteLength;
+
+    // Extract timestamp (first 8 bytes, bincode u64 LE)
+    if (data.byteLength >= 8) {
+      const view = new DataView(data.buffer, data.byteOffset, 8);
+      const ts = Number(view.getBigUint64(0, true));
+      if (ts > 0) {
+        const latency = Date.now() - ts;
+        if (latency >= 0 && latency < 10000) {
+          stats.latencySum += latency;
+          stats.latencyCount++;
+        }
+      }
+    }
+
+    // Parse joint positions for display
+    if (trackName === 'sensors/joints' && data.byteLength >= 64) {
+      const view = new DataView(data.buffer, data.byteOffset);
+      const joints = [];
+      for (let i = 0; i < 7; i++) {
+        joints.push(view.getFloat64(8 + i * 8, true).toFixed(2));
+      }
+      this.jointsEl.textContent = `J:[${joints.join(', ')}]`;
+    }
+  }
+
+  updateRawBlob(trackName, data) {
+    const stats = this.tracks[trackName];
+    if (!stats) return;
+    stats.count++;
+    stats.bytes += data.byteLength;
+    if (data.byteLength >= 8) {
+      const view = new DataView(data.buffer, data.byteOffset, 8);
+      const ts = Number(view.getBigUint64(0, true));
+      if (ts > 0) {
+        const latency = Date.now() - ts;
+        if (latency >= 0 && latency < 10000) {
+          stats.latencySum += latency;
+          stats.latencyCount++;
+        }
+      }
+    }
+  }
+}
+
+function createRobotCell(robotId) {
+  const cell = document.createElement('div');
+  cell.className = 'robot-cell';
+  cell.innerHTML = `
+    <img style="display:none" alt="${robotId}">
+    <div class="no-video">waiting for video...</div>
+    <div class="robot-overlay">
+      <span class="robot-name">${robotId}</span>
+      <div class="robot-stats">
+        <span class="fps">--</span>
+        <span class="heartbeat-dot"></span>
+      </div>
+    </div>
+    <div class="robot-bottom">
+      <span class="joints"></span>
+      <span class="throughput"></span>
+    </div>
+  `;
+  return cell;
+}
+
+function logError(msg) {
+  const el = document.getElementById('error-log');
+  const line = document.createElement('div');
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+  console.warn(msg);
+}
+
+async function readTrack(broadcast, trackName, priority, robotState) {
+  // Auto-resubscribe when a track ends (relay may close subscriptions)
+  for (let attempt = 0; ; attempt++) {
+    const track = broadcast.subscribe(trackName, priority);
+    let frames = 0;
+    try {
+      for (;;) {
+        const frame = await track.readFrame();
+        if (!frame) {
+          logError(`${robotState.id}/${trackName}: readFrame returned null after ${frames} frames`);
+          break;
+        }
+        frames++;
+
+        if (trackName === 'safety/heartbeat') {
+          robotState.updateHeartbeat(frame);
+        } else if (trackName.startsWith('video/')) {
+          robotState.updateCamera(trackName, frame);
+        } else if (trackName === 'perception/pointcloud') {
+          robotState.updateRawBlob(trackName, frame);
+        } else {
+          robotState.updateTelemetry(trackName, frame);
+        }
+      }
+    } catch (e) {
+      logError(`${robotState.id}/${trackName}: error after ${frames} frames: ${e.message}`);
+    }
+    // If the whole connection is closed, stop retrying
+    if (!connection) return;
+    logError(`${robotState.id}/${trackName}: resubscribing (attempt ${attempt + 1})...`);
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
+// Only subscribe to tracks the viewer actually renders.
+// Subscribing to all 10 tracks (~600+ frames/sec) overwhelms the browser JS thread,
+// causing flow control backpressure that stalls the entire connection.
+const VIEWER_TRACKS = [
+  'safety/heartbeat',
+  'sensors/joints',
+  'video/camera0',
+  'video/camera1',
+  'video/camera2',
+];
+
+async function subscribeRobot(conn, robotId, robotState) {
+  const broadcast = conn.consume(Moq.Path.from(robotId));
+
+  for (const def of TRACKS) {
+    if (VIEWER_TRACKS.includes(def.name)) {
+      readTrack(broadcast, def.name, def.priority, robotState);
+    }
+  }
+}
+
+async function doConnect() {
+  const relayUrl = document.getElementById('relay-url').value;
+  const numRobots = parseInt(document.getElementById('num-robots').value) || 1;
+  const statusEl = document.getElementById('status-text');
+
+  statusEl.textContent = 'Connecting...';
+  statusEl.className = '';
+
+  try {
+    const url = new URL(relayUrl);
+    // NOTE: Safari's WebTransport with serverCertificateHashes is broken.
+    // Use Chrome for dev/localhost. Production would use proper TLS certs.
+    connection = await Moq.Connection.connect(url, {
+      websocket: { enabled: true },
+    });
+
+    const transport = connection.quic instanceof WebTransport ? 'WebTransport' : 'WebSocket';
+    statusEl.textContent = `Connected (${connection.version}) via ${transport}`;
+    statusEl.className = 'connected';
+    logError(`Transport: ${transport}`);
+
+    // Create robot cells
+    const grid = document.getElementById('grid');
+    grid.innerHTML = '';
+    robots = {};
+
+    for (let i = 1; i <= numRobots; i++) {
+      const robotId = `robot-${i}`;
+      const cell = createRobotCell(robotId);
+      grid.appendChild(cell);
+      const state = new RobotState(robotId, cell);
+      robots[robotId] = state;
+      subscribeRobot(connection, robotId, state);
+    }
+
+    // Update button
+    const btn = document.getElementById('connect-btn');
+    btn.textContent = 'Disconnect';
+    btn.className = 'disconnect';
+
+    // Wait for close
+    await connection.closed;
+    statusEl.textContent = 'Disconnected';
+    statusEl.className = '';
+  } catch (e) {
+    statusEl.textContent = `Error: ${e.message}`;
+    statusEl.className = 'error';
+    console.error('Connection error:', e);
+  }
+
+  const btn = document.getElementById('connect-btn');
+  btn.textContent = 'Connect';
+  btn.className = '';
+  connection = null;
+}
+
+window.toggleConnect = function() {
+  if (connection) {
+    connection.close();
+  } else {
+    doConnect();
+  }
+};
+
+window.toggleStats = function() {
+  const table = document.getElementById('track-table');
+  table.classList.toggle('visible', document.getElementById('show-stats').checked);
+};
+
+// 1Hz display update
+setInterval(() => {
+  let totalBytes = 0;
+  let totalTracks = 0;
+  let activeRobots = 0;
+  const tbody = document.getElementById('track-tbody');
+  tbody.innerHTML = '';
+
+  for (const [robotId, state] of Object.entries(robots)) {
+    // Heartbeat watchdog
+    const hbAlive = (Date.now() - state.lastHeartbeat) < 500;
+    state.heartbeatDot.className = `heartbeat-dot ${state.lastHeartbeat > 0 ? (hbAlive ? 'alive' : 'dead') : ''}`;
+
+    // Camera FPS
+    const selectedCam = document.getElementById('camera-select').value;
+    const camTrack = `video/camera${selectedCam}`;
+    const camStats = state.tracks[camTrack];
+    const fps = camStats ? camStats.count : 0;
+    state.fpsEl.textContent = `${fps} fps`;
+
+    // Total throughput for this robot
+    let robotBytes = 0;
+    let robotActive = false;
+
+    for (const def of TRACKS) {
+      const s = state.tracks[def.name];
+      const count = s.count;
+      const bytes = s.bytes;
+      const avgLat = s.latencyCount > 0 ? Math.round(s.latencySum / s.latencyCount) : 0;
+      const pct = def.rate > 0 ? Math.round(count * 100 / def.rate) : 0;
+
+      robotBytes += bytes;
+      if (count > 0) robotActive = true;
+
+      // Stats table row
+      if (document.getElementById('show-stats').checked) {
+        const tr = document.createElement('tr');
+        const statusClass = pct >= 80 ? 'ok' : pct > 0 ? 'degraded' : 'dead';
+        tr.innerHTML = `
+          <td>${robotId}</td>
+          <td>${def.name}</td>
+          <td>P${def.priority}</td>
+          <td>${count}/s</td>
+          <td>${def.rate}/s</td>
+          <td class="${statusClass}">${pct}%</td>
+          <td>${avgLat}ms</td>
+          <td>${formatBytes(bytes)}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      // Reset per-second counters
+      s.count = 0;
+      s.bytes = 0;
+      s.latencySum = 0;
+      s.latencyCount = 0;
+    }
+
+    totalBytes += robotBytes;
+    if (robotActive) activeRobots++;
+    state.throughputEl.textContent = formatBytes(robotBytes);
+  }
+
+  // Aggregate stats
+  const numRobots = Object.keys(robots).length;
+  if (numRobots > 0) {
+    document.getElementById('aggregate-stats').textContent =
+      `${activeRobots}/${numRobots} robots active | ${formatBytes(totalBytes)} total`;
+  }
+}, 1000);
+
+function formatBytes(bytes) {
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB/s`;
+  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(1)} KB/s`;
+  return `${bytes} B/s`;
+}
+</script>
+</body>
+</html>
