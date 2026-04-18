@@ -13,6 +13,7 @@ use clap::Parser;
 use url::Url;
 
 mod publish;
+mod replay;
 mod schema;
 mod subscribe;
 
@@ -60,6 +61,15 @@ pub struct Config {
     /// Log QUIC congestion controller bandwidth estimate every second (publisher only).
     #[arg(long)]
     pub log_bandwidth: bool,
+
+    /// Replay DROID dataset from the given directory instead of synthetic data (publisher only).
+    /// Directory must contain meta.json and episode_NNN/ subdirectories.
+    #[arg(long)]
+    pub replay: Option<String>,
+
+    /// Publish all 3 cameras (default: camera0 only). Only used with --replay.
+    #[arg(long)]
+    pub all_cameras: bool,
 }
 
 #[derive(Parser, Clone)]
@@ -76,9 +86,27 @@ async fn main() -> anyhow::Result<()> {
     let client = config.client.init()?;
 
     match config.role {
-        Role::Publish => publish::run(client, &config.url, &config.broadcast, config.no_priority, config.single_stream, config.no_shed, config.log_bandwidth)
-            .await
-            .context("publisher error"),
+        Role::Publish => {
+            if let Some(ref replay_path) = config.replay {
+                publish::run_replay(
+                    client,
+                    &config.url,
+                    &config.broadcast,
+                    replay_path,
+                    config.all_cameras,
+                    config.no_priority,
+                    config.single_stream,
+                    config.no_shed,
+                    config.log_bandwidth,
+                )
+                .await
+                .context("replay publisher error")
+            } else {
+                publish::run(client, &config.url, &config.broadcast, config.no_priority, config.single_stream, config.no_shed, config.log_bandwidth)
+                    .await
+                    .context("publisher error")
+            }
+        }
         Role::Subscribe => {
             subscribe::run(client, &config.url, &config.broadcast, config.csv, config.no_priority, config.single_stream)
                 .await

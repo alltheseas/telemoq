@@ -4,6 +4,7 @@ use anyhow::Context;
 use moq_lite::*;
 use url::Url;
 
+use crate::replay::ReplayReader;
 use crate::schema::{self, now_ms, shed_thresholds, TRACKS};
 
 /// Write a frame to the correct destination.
@@ -363,6 +364,209 @@ pub async fn run(
                             let mut frame = vec![0u8; 50_000];
                             frame[..8].copy_from_slice(&ts.to_le_bytes());
                             emit_frame(&mut mux_track, &mut track_producers, 9, frame);
+                        }
+                    }
+                }
+            }
+        } => Ok(()),
+    }
+}
+
+/// Publish DROID dataset replay: real camera JPEGs + real joint state at 15Hz,
+/// synthetic data for all other tracks at normal rates.
+pub async fn run_replay(
+    client: moq_native::Client,
+    url: &Url,
+    broadcast_name: &str,
+    replay_path: &str,
+    all_cameras: bool,
+    no_priority: bool,
+    single_stream: bool,
+    no_shed: bool,
+    log_bandwidth: bool,
+) -> anyhow::Result<()> {
+    let replay_dir = std::path::Path::new(replay_path);
+    let mut reader = ReplayReader::open(replay_dir, all_cameras, true)?;
+    let fps = reader.meta().fps;
+
+    tracing::info!(
+        broadcast = %broadcast_name,
+        replay = %replay_path,
+        fps,
+        all_cameras,
+        "publishing DROID replay"
+    );
+
+    let origin = Origin::produce();
+    let mut broadcast = Broadcast::produce();
+
+    let mut mux_track: Option<TrackProducer> = None;
+    let mut track_producers: Vec<TrackProducer> = Vec::new();
+
+    if single_stream {
+        let track = broadcast.create_track(Track {
+            name: "multiplexed".to_string(),
+            priority: 0,
+        })?;
+        mux_track = Some(track);
+    } else {
+        for def in TRACKS {
+            let priority = if no_priority { 0 } else { def.priority };
+            let track = broadcast.create_track(Track {
+                name: def.name.to_string(),
+                priority,
+            })?;
+            tracing::info!(track = %def.name, priority, "created track");
+            track_producers.push(track);
+        }
+    }
+
+    origin.publish_broadcast(broadcast_name, broadcast.consume());
+
+    let session = client
+        .with_publish(origin.consume())
+        .connect(url.clone())
+        .await
+        .context("failed to connect")?;
+
+    let bw_consumer = session.send_bandwidth();
+
+    if log_bandwidth {
+        if let Some(ref bw) = bw_consumer {
+            let bw = bw.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(1));
+                loop {
+                    interval.tick().await;
+                    let estimate = bw.peek();
+                    tracing::info!(bandwidth_bps = ?estimate, "CC bandwidth estimate");
+                }
+            });
+        }
+    }
+
+    let shed_enabled = !single_stream && !no_priority && !no_shed;
+    let mut shed_state = ShedState::new();
+
+    // DROID replay interval (15 Hz from dataset)
+    let replay_interval_ms = 1000 / fps as u64;
+    let mut replay_tick = tokio::time::interval(Duration::from_millis(replay_interval_ms));
+
+    // Synthetic track intervals (for tracks DROID doesn't provide)
+    let mut heartbeat_interval = tokio::time::interval(Duration::from_millis(100));   // 10 Hz
+    let mut streaming_interval = tokio::time::interval(Duration::from_millis(6));     // ~167 Hz
+    let mut task_status_interval = tokio::time::interval(Duration::from_millis(100)); // 10 Hz
+    let mut ft_interval = tokio::time::interval(Duration::from_millis(10));           // 100 Hz
+    let mut imu_interval = tokio::time::interval(Duration::from_millis(5));           // 200 Hz
+    let mut pointcloud_interval = tokio::time::interval(Duration::from_millis(200));  // 5 Hz
+
+    let mut heartbeat_seq: u64 = 0;
+
+    tracing::info!("replay publishing started — real cameras + joints at {fps}Hz, synthetic telemetry at normal rates");
+
+    tokio::select! {
+        res = session.closed() => res.context("session closed"),
+        _ = async {
+            loop {
+                let bw_estimate = if shed_enabled {
+                    bw_consumer.as_ref().and_then(|c| c.peek())
+                } else {
+                    None
+                };
+
+                tokio::select! {
+                    _ = replay_tick.tick() => {
+                        // Read next DROID frame (joints + cameras)
+                        if let Some(step) = reader.next_step() {
+                            let ts = now_ms();
+
+                            // Publish joint state (idx 3) from DROID 7-DOF state
+                            if shed_state.should_emit(3, bw_estimate) {
+                                let joint_state = schema::JointState {
+                                    timestamp_ms: ts,
+                                    positions: step.telemetry.state.map(|v| v as f64),
+                                    velocities: step.telemetry.action.map(|v| v as f64),
+                                };
+                                let payload = bincode::serialize(&joint_state).expect("JointState");
+                                emit_frame(&mut mux_track, &mut track_producers, 3, payload);
+                            }
+
+                            // Publish camera0 (idx 7) — real JPEG
+                            if !step.camera0_jpeg.is_empty() && shed_state.should_emit(7, bw_estimate) {
+                                let mut frame = Vec::with_capacity(8 + step.camera0_jpeg.len());
+                                frame.extend_from_slice(&ts.to_le_bytes());
+                                frame.extend_from_slice(&step.camera0_jpeg);
+                                emit_frame(&mut mux_track, &mut track_producers, 7, frame);
+                            }
+
+                            // Publish camera1 (idx 8) — real JPEG if available
+                            if let Some(ref jpeg) = step.camera1_jpeg {
+                                if !jpeg.is_empty() && shed_state.should_emit(8, bw_estimate) {
+                                    let mut frame = Vec::with_capacity(8 + jpeg.len());
+                                    frame.extend_from_slice(&ts.to_le_bytes());
+                                    frame.extend_from_slice(jpeg);
+                                    emit_frame(&mut mux_track, &mut track_producers, 8, frame);
+                                }
+                            }
+
+                            // Publish camera2 (idx 9) — real JPEG if available
+                            if let Some(ref jpeg) = step.camera2_jpeg {
+                                if !jpeg.is_empty() && shed_state.should_emit(9, bw_estimate) {
+                                    let mut frame = Vec::with_capacity(8 + jpeg.len());
+                                    frame.extend_from_slice(&ts.to_le_bytes());
+                                    frame.extend_from_slice(jpeg);
+                                    emit_frame(&mut mux_track, &mut track_producers, 9, frame);
+                                }
+                            }
+                        }
+                    }
+
+                    // Synthetic tracks — identical to normal publish mode
+                    _ = heartbeat_interval.tick() => {
+                        let ts = now_ms();
+                        heartbeat_seq += 1;
+                        let data = schema::generate_heartbeat(ts, heartbeat_seq);
+                        let payload = bincode::serialize(&data).expect("Heartbeat");
+                        emit_frame(&mut mux_track, &mut track_producers, 0, payload);
+                    }
+                    _ = streaming_interval.tick() => {
+                        if shed_state.should_emit(1, bw_estimate) {
+                            let ts = now_ms();
+                            let data = schema::generate_streaming_command(ts);
+                            let payload = bincode::serialize(&data).expect("StreamingCommand");
+                            emit_frame(&mut mux_track, &mut track_producers, 1, payload);
+                        }
+                    }
+                    _ = task_status_interval.tick() => {
+                        if shed_state.should_emit(2, bw_estimate) {
+                            let ts = now_ms();
+                            let data = schema::generate_task_status(ts);
+                            let payload = bincode::serialize(&data).expect("TaskStatus");
+                            emit_frame(&mut mux_track, &mut track_producers, 2, payload);
+                        }
+                    }
+                    _ = ft_interval.tick() => {
+                        if shed_state.should_emit(4, bw_estimate) {
+                            let ts = now_ms();
+                            let data = schema::generate_force_torque(ts);
+                            let payload = bincode::serialize(&data).expect("ForceTorque");
+                            emit_frame(&mut mux_track, &mut track_producers, 4, payload);
+                        }
+                    }
+                    _ = imu_interval.tick() => {
+                        if shed_state.should_emit(5, bw_estimate) {
+                            let ts = now_ms();
+                            let data = schema::generate_imu(ts);
+                            let payload = bincode::serialize(&data).expect("ImuReading");
+                            emit_frame(&mut mux_track, &mut track_producers, 5, payload);
+                        }
+                    }
+                    _ = pointcloud_interval.tick() => {
+                        if shed_state.should_emit(6, bw_estimate) {
+                            let ts = now_ms();
+                            let mut cloud = vec![0u8; 50_000];
+                            cloud[..8].copy_from_slice(&ts.to_le_bytes());
+                            emit_frame(&mut mux_track, &mut track_producers, 6, cloud);
                         }
                     }
                 }
