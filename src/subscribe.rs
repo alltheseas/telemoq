@@ -333,9 +333,11 @@ async fn display_loop(
                 format!("\x1B[31m{lat_str}\x1B[0m")
             };
 
-            // Color gap: green if within 12ms extrapolation window, red if exceeding
+            // Color gap: green if within 3× expected interval, red if exceeding
+            let expected_interval_ms = if def.rate_hz > 0 { 1000 / def.rate_hz as u64 } else { 100 };
+            let gap_threshold = expected_interval_ms * 3;
             let gap_str = format!("{:>3}ms", gap);
-            let gap_colored = if gap <= 12 {
+            let gap_colored = if gap <= gap_threshold {
                 format!("\x1B[32m{gap_str}\x1B[0m")
             } else {
                 format!("\x1B[31m{gap_str}\x1B[0m")
@@ -403,7 +405,7 @@ async fn display_loop(
         }
 
         println!("  ╟──────────────────────┴─────┴─────────┴──────────┴────────────┴─────────┴───────┴───────────────────────╢");
-        println!("  ║  Latency = wall-clock delta (pub→relay→sub).  Gap = max inter-arrival time (12ms = IHMC KST window).  ║");
+        println!("  ║  Latency = wall-clock delta (pub→relay→sub).  Gap = max inter-arrival time (green < 3× expected interval). ║");
         println!("  ║                                                                                                        ║");
         println!("  ║  IHMC DRC lesson: 9,600 bps was enough for control. Video is expendable.                               ║");
         println!("  ║  TCP/WebRTC: One lost video packet  →  ALL streams freeze (HOL blocking)                               ║");
