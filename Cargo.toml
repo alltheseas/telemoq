@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "zenoh-bench"]
+
 [package]
 name = "telemoq"
 version = "0.1.0"

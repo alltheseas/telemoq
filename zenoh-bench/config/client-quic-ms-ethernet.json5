@@ -1,0 +1,17 @@
+{
+  mode: "client",
+  connect: {
+    endpoints: ["quic/10.0.0.1:7447?multistream=1"],
+  },
+  scouting: {
+    multicast: { enabled: false },
+  },
+  transport: {
+    link: {
+      tls: {
+        root_ca_certificate: "config/tls/cert.pem",
+        verify_name_on_connect: false,
+      },
+    },
+  },
+}

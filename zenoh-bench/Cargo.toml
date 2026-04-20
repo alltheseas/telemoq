@@ -1,0 +1,16 @@
+[package]
+name = "zenoh-teleop-bench"
+version = "0.1.0"
+edition = "2021"
+description = "Zenoh priority starvation benchmark for robotics teleoperation — apples-to-apples comparison with telemoq"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+zenoh = { version = "1", features = ["default"] }
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+bincode = "1"
+serde = { version = "1", features = ["derive"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
