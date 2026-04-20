@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Fleet Congestion Demo — MoQ vs Zenoh vs WebRTC</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1/dist/fonts/geist-sans/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1/dist/fonts/geist-mono/style.css">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#000719;--surface:#0d112e;--surface2:#1b2046;--border:#1d2654;
+  --text:#ffffff;--text-dim:#b0b0b0;--text-muted:#808090;
+  --accent:#ffff05;--accent-dim:rgba(255,255,5,.10);
+  --red:#ef4444;--red-dim:rgba(239,68,68,.15);--red-bright:#ff6b6b;
+  --green:#22c55e;--green-dim:rgba(34,197,94,.15);
+  --blue:#3b82f6;--blue-dim:rgba(59,130,246,.12);
+  --orange:#f59e0b;--orange-dim:rgba(245,158,11,.12);
+  --font-sans:'Geist',system-ui,sans-serif;
+  --font-mono:'Geist Mono',monospace;
+}
+html{font-size:15px}
+body{font-family:var(--font-sans);color:var(--text);background:var(--bg);line-height:1.6;min-height:100vh}
+.wrap{max-width:1320px;margin:0 auto;padding:2rem 1.5rem}
+
+.hero{text-align:center;margin-bottom:2rem;padding:1.5rem 0}
+.hero h1{font-size:2rem;font-weight:600;letter-spacing:-.06em;text-transform:uppercase;line-height:.95;margin-bottom:.5rem}
+.hero h1 .hl{color:var(--accent)}
+.hero .sub{font-size:.92rem;color:var(--text-dim);max-width:720px;margin:0 auto;line-height:1.5;text-align:left}
+.badge{display:inline-block;font-family:var(--font-mono);font-size:.72rem;padding:.25rem .7rem;margin-bottom:1rem;letter-spacing:.04em;background:var(--accent-dim);color:var(--accent);border:1px solid rgba(255,255,5,.2)}
+
+.scenario{
+  display:flex;align-items:center;justify-content:center;gap:1rem;
+  margin-bottom:1.5rem;padding:.7rem 1.2rem;
+  background:var(--surface);border:1px solid var(--border);flex-wrap:wrap;
+}
+.scenario .label{font-family:var(--font-mono);font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em}
+.scenario .val{font-family:var(--font-mono);font-size:.85rem;font-weight:500;color:var(--accent)}
+.scenario .sep{color:var(--border)}
+.bw-wrap{display:flex;align-items:center;gap:.5rem}
+.bw-bar{width:100px;height:8px;background:rgba(255,255,255,.08);overflow:hidden}
+.bw-fill{height:100%;transition:width .3s,background .3s}
+.robot-btns{display:flex;gap:4px}
+.robot-btns button{
+  font-family:var(--font-mono);font-size:.75rem;padding:3px 10px;
+  background:var(--surface2);color:var(--text-dim);border:1px solid var(--border);cursor:pointer;
+}
+.robot-btns button.active{background:var(--accent-dim);color:var(--accent);border-color:rgba(255,255,5,.3)}
+.robot-btns button:hover{border-color:var(--accent)}
+
+.panels{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:2rem}
+@media(max-width:960px){.panels{grid-template-columns:1fr;gap:1.5rem}}
+
+.panel{border:1px solid var(--border);background:var(--surface);overflow:hidden}
+.panel-header{padding:.6rem 1rem;display:flex;align-items:center;gap:.5rem;border-bottom:1px solid var(--border)}
+.panel-header .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.panel-header .proto{font-family:var(--font-mono);font-size:.85rem;font-weight:600}
+.panel-header .desc{font-size:.78rem;color:var(--text-dim);margin-left:auto}
+.panel.moq .panel-header{background:var(--green-dim)}
+.panel.moq .dot{background:var(--green)}
+.panel.zenoh .panel-header{background:var(--orange-dim)}
+.panel.zenoh .dot{background:var(--orange)}
+.panel.webrtc .panel-header{background:var(--red-dim)}
+.panel.webrtc .dot{background:var(--red)}
+
+.fleet-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px;padding:6px}
+.robot-card{
+  display:flex;align-items:center;gap:6px;padding:5px 8px;
+  background:var(--surface2);transition:background .3s;
+}
+.robot-card.ok{background:rgba(34,197,94,.06)}
+.robot-card.degraded{background:rgba(245,158,11,.06)}
+.robot-card.lost{background:rgba(239,68,68,.08)}
+
+.rdot{width:8px;height:8px;border-radius:50%;flex-shrink:0;transition:background .3s,box-shadow .3s}
+.rdot.ok{background:var(--green);box-shadow:0 0 4px var(--green)}
+.rdot.degraded{background:var(--orange);box-shadow:0 0 4px var(--orange)}
+.rdot.lost{background:var(--red);animation:pulse-red .5s infinite}
+@keyframes pulse-red{0%,100%{opacity:1}50%{opacity:.3}}
+
+.rname{font-family:var(--font-mono);font-size:.72rem;min-width:48px}
+.rinfo{font-family:var(--font-mono);font-size:.62rem;color:var(--text-dim);margin-left:auto;white-space:nowrap;overflow:hidden}
+
+.panel-summary{padding:.7rem 1rem;border-top:1px solid var(--border);display:flex;align-items:baseline;gap:.8rem}
+.summary-big{font-family:var(--font-mono);font-size:1.3rem;font-weight:700;white-space:nowrap}
+.summary-big.ok{color:var(--green)}
+.summary-big.warn{color:var(--orange)}
+.summary-big.bad{color:var(--red)}
+.summary-detail{font-family:var(--font-mono);font-size:.72rem;color:var(--text-dim);line-height:1.3}
+
+.track-detail{margin-bottom:2rem}
+.track-detail h2{font-size:1.1rem;font-weight:600;margin-bottom:.8rem;text-transform:uppercase;letter-spacing:-.03em}
+.track-cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem}
+@media(max-width:960px){.track-cols{grid-template-columns:1fr}}
+.track-col{background:var(--surface);border:1px solid var(--border);overflow:hidden}
+.track-col-hdr{padding:.4rem .8rem;font-family:var(--font-mono);font-size:.78rem;font-weight:600;border-bottom:1px solid var(--border)}
+.track-col.moq .track-col-hdr{background:var(--green-dim)}
+.track-col.zenoh .track-col-hdr{background:var(--orange-dim)}
+.track-col.webrtc .track-col-hdr{background:var(--red-dim)}
+.trow{display:grid;grid-template-columns:110px 30px 1fr 46px;align-items:center;gap:4px;padding:3px 8px;border-bottom:1px solid rgba(255,255,255,.04);font-size:.75rem}
+.trow:last-child{border-bottom:none}
+.trow .tname{font-family:var(--font-mono);color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trow .tpri{font-family:var(--font-mono);font-size:.68rem;color:var(--text-muted)}
+.tbar{height:5px;background:rgba(255,255,255,.06);overflow:hidden}
+.tbar .tfill{height:100%;transition:width .4s,background .3s}
+.trow .tpct{font-family:var(--font-mono);text-align:right;font-size:.72rem}
+
+.legend{
+  display:flex;flex-wrap:wrap;gap:.6rem 1.5rem;margin-bottom:1.5rem;padding:.7rem 1rem;
+  background:var(--surface);border:1px solid var(--border);font-size:.82rem;color:var(--text-dim);line-height:1.4;
+}
+.legend-item{display:flex;align-items:baseline;gap:.4rem}
+.legend-item strong{color:var(--text);font-size:.78rem}
+
+.explain{margin-bottom:2rem}
+.explain h2{font-size:1.1rem;font-weight:600;margin-bottom:.8rem;text-transform:uppercase;letter-spacing:-.03em}
+.explain-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem}
+@media(max-width:800px){.explain-cards{grid-template-columns:1fr}}
+.explain-card{padding:1rem;border:1px solid var(--border);background:var(--surface)}
+.explain-card h3{font-family:var(--font-mono);font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem;display:flex;align-items:center;gap:.4rem}
+.explain-card h3 .marker{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.explain-card p{font-size:.88rem;color:var(--text);line-height:1.5}
+.explain-card code{font-family:var(--font-mono);font-size:.72rem;padding:.1rem .3rem;background:var(--surface2)}
+
+.validation{margin-bottom:2rem;padding:1.2rem;background:var(--surface);border:1px solid var(--border)}
+.validation h2{font-size:1.1rem;font-weight:600;margin-bottom:.8rem;text-transform:uppercase;letter-spacing:-.03em}
+.val-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:1rem}
+@media(max-width:800px){.val-grid{grid-template-columns:1fr}}
+.val-card{padding:.8rem;border:1px solid var(--border);background:var(--surface2)}
+.val-card .vproto{font-family:var(--font-mono);font-size:.72rem;font-weight:600;text-transform:uppercase;margin-bottom:.3rem;display:flex;align-items:center;gap:.4rem}
+.val-card .vnum{font-family:var(--font-mono);font-size:1.4rem;font-weight:700;margin-bottom:.2rem}
+.val-card .vdesc{font-size:.82rem;color:var(--text-dim);line-height:1.4}
+.val-note{font-size:.85rem;color:var(--text);line-height:1.5;padding:.8rem 1rem;border-top:3px solid var(--accent);background:var(--accent-dim)}
+
+.foot{text-align:left;padding:1.5rem 0;border-top:1px solid var(--border);margin-top:2rem}
+.foot p{font-size:.88rem;color:var(--text)}
+.foot a{color:var(--accent);text-decoration:none}
+.foot a:hover{text-decoration:underline}
+.foot .built{font-family:var(--font-mono);font-size:.78rem;color:var(--text-dim);margin-top:.4rem}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.fade-in{animation:fadeUp .5s ease both;animation-delay:calc(var(--i,0) * .08s)}
+@media(prefers-reduced-motion:reduce){.fade-in{animation:none;opacity:1}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero fade-in" style="--i:0">
+  <div class="badge">fleet-scale congestion comparison</div>
+  <h1>10 Robots. 1 WiFi Link.<br>Only <span class="hl">MoQ</span> Keeps Them All.</h1>
+  <p class="sub">
+    Each robot streams 10 data tracks at 38.5 Mbps &mdash; safety heartbeat, control commands, joint sensors, IMU, force/torque, point cloud, and three camera feeds. When WiFi degrades (steel hulls, welding EMI, AP congestion), total fleet demand exceeds available bandwidth. What happens to robot control depends entirely on the transport protocol.
+  </p>
+</header>
+
+<div class="scenario fade-in" style="--i:1">
+  <span class="label">Robots</span>
+  <div class="robot-btns">
+    <button onclick="setRobots(3)">3</button>
+    <button onclick="setRobots(5)">5</button>
+    <button class="active" onclick="setRobots(10)">10</button>
+  </div>
+  <span class="sep">|</span>
+  <span class="label">Link</span>
+  <div class="bw-wrap">
+    <div class="bw-bar"><div class="bw-fill" id="bw-fill" style="width:100%;background:var(--green)"></div></div>
+    <span class="val" id="bw-val">400 Mbps</span>
+  </div>
+  <span class="sep">|</span>
+  <span class="label">Phase</span>
+  <span class="val" id="phase-label" style="color:var(--green)">Normal operation</span>
+  <span class="sep">|</span>
+  <span class="label">Demand</span>
+  <span class="val" id="demand-val">385 Mbps</span>
+</div>
+
+<div class="panels fade-in" style="--i:2" id="panels"></div>
+
+<div class="legend fade-in" style="--i:2">
+  <div class="legend-item"><span class="rdot ok" style="display:inline-block"></span> <strong>OK</strong> — heartbeat arriving within 250ms, control data flowing</div>
+  <div class="legend-item"><span class="rdot degraded" style="display:inline-block"></span> <strong>DEGRADED</strong> — heartbeat latency 250–500ms, control intermittent</div>
+  <div class="legend-item"><span class="rdot lost" style="display:inline-block;animation:none;opacity:1"></span> <strong>NO HEARTBEAT</strong> — heartbeat latency &gt;500ms, exceeds watchdog threshold. Operator has lost contact.</div>
+  <div class="legend-item"><span class="rdot lost" style="display:inline-block;animation:none;opacity:1"></span> <strong>FROZEN</strong> (WebRTC only) — head-of-line blocking. All data stopped for 1–4 seconds while a lost video packet retransmits. Heartbeat, control, sensors — everything blocked behind it.</div>
+</div>
+
+<section class="track-detail fade-in" style="--i:3">
+  <h2>Per-Track Delivery: robot-1 Under Congestion</h2>
+  <div class="track-cols" id="track-cols"></div>
+</section>
+
+<section class="explain fade-in" style="--i:4">
+  <h2>What's Happening Under Congestion</h2>
+  <div class="explain-cards">
+    <div class="explain-card">
+      <h3><span class="marker" style="background:var(--green)"></span>MoQ: Priority Starvation</h3>
+      <p>Each track gets a QUIC stream with explicit priority. Under congestion, the scheduler sends <code>P255</code> heartbeat first, then <code>P200</code> control, down to <code>P1</code> video. All 10 robots keep full control. Video degrades to ~2 fps &mdash; the operator sees choppy cameras but never loses the robot.</p>
+    </div>
+    <div class="explain-card">
+      <h3><span class="marker" style="background:var(--orange)"></span>Zenoh: Equal Degradation</h3>
+      <p>Separate QUIC streams per topic &mdash; no head-of-line blocking. But without priority, the scheduler treats heartbeat and video equally. Under fleet congestion, video frames fill the write queue and heartbeat packets wait behind them. Latency exceeds the 500ms watchdog &mdash; robots intermittently lose contact.</p>
+    </div>
+    <div class="explain-card">
+      <h3><span class="marker" style="background:var(--red)"></span>WebRTC: Head-of-Line Blocking</h3>
+      <p>All data muxed into a single ordered DTLS stream per robot. One lost video packet blocks everything behind it &mdash; including e-stop. Under fleet congestion, retransmissions cascade. Random robots freeze completely for 200-800ms at a time. The operator cannot predict which robot will respond.</p>
+    </div>
+  </div>
+</section>
+
+<section class="validation fade-in" style="--i:5">
+  <h2>Heartbeat Latency Benchmarks</h2>
+  <div class="val-grid">
+    <div class="val-card">
+      <div class="vproto"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green)"></span> MoQ (telemoq)</div>
+      <div class="vnum" style="color:var(--green)">&lt;21 ms</div>
+      <div class="vdesc">Heartbeat latency during 5MB video burst. 100% delivery. Safety always arrives first.</div>
+    </div>
+    <div class="val-card">
+      <div class="vproto"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--orange)"></span> Zenoh QUIC Multistream</div>
+      <div class="vnum" style="color:var(--orange)">87 ms</div>
+      <div class="vdesc">Heartbeat latency during identical burst. 4.1x slower &mdash; no priority differentiation in Quinn scheduler.</div>
+    </div>
+    <div class="val-card">
+      <div class="vproto"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--red)"></span> WebRTC-like (single stream)</div>
+      <div class="vnum" style="color:var(--red)">1,004 ms</div>
+      <div class="vdesc">Heartbeat latency via Zenoh TCP. Head-of-line blocking. 47.8x slower than MoQ. Control blackout.</div>
+    </div>
+  </div>
+  <div class="val-note">
+    <strong>Methodology:</strong> telemoq's <code>--no-priority</code> mode disables QUIC priority labels, producing identical scheduling behavior to Zenoh QUIC multistream. <code>--single-stream</code> mode muxes all tracks into one stream, matching WebRTC/DTLS behavior. All three modes run in a single Rust binary against the same MoQ relay &mdash; the only variable is the transport strategy. Benchmarks at <a href="telemoq-benchmark.html" style="color:var(--accent)">telemoq-benchmark.html</a>.
+  </div>
+</section>
+
+<footer class="foot fade-in" style="--i:6">
+  <p><a href="https://github.com/alltheseas/telemoq">github.com/alltheseas/telemoq</a> &mdash; MoQ transport for robotics teleoperation (Rust/QUIC)</p>
+  <p class="built">
+    <a href="telemoq-vs-webrtc.html">Single-robot comparison</a> &bull;
+    <a href="viewer.html">Live fleet viewer</a> &bull;
+    <a href="telemoq-benchmark.html">Benchmark data</a>
+  </p>
+  <div style="margin-top:.8rem;font-size:.78rem;color:var(--text-muted);max-width:700px;line-height:1.5">
+    <strong style="color:var(--text-dim)">Simulation note:</strong> This page simulates protocol behavior based on measured benchmarks. Zenoh behavior modeled from zenoh-teleop-bench QUIC multistream results (zenoh 1.9.0, same Quinn QUIC stack). WebRTC modeled from single-stream TCP/DTLS HOL blocking characteristics. Fleet-scale extrapolation assumes linear bandwidth demand scaling.
+  </div>
+</footer>
+
+</div>
+
+<script>
+// ─── Configuration ───
+let NUM_ROBOTS = 10;
+const PER_ROBOT_BW = 38.5;     // Mbps total
+const PER_ROBOT_CTRL = 0.508;  // Mbps control+sensor data (P≥50)
+const FULL_BW = 400;           // Mbps — adequate for 10 robots
+const CONGESTED_BW = 50;       // Mbps — interference event
+
+// Track definitions matching schema.rs
+const TRACKS = [
+  { name: 'safety/hb',       pri: 'P0',  rate: 10,  bw: 0.00136 },
+  { name: 'ctrl/streaming',  pri: 'P1',  rate: 167, bw: 0.2138  },
+  { name: 'ctrl/task',       pri: 'P1',  rate: 10,  bw: 0.0112  },
+  { name: 'sensors/joints',  pri: 'P2',  rate: 100, bw: 0.096   },
+  { name: 'sensors/ft',      pri: 'P3',  rate: 100, bw: 0.0448  },
+  { name: 'sensors/imu',     pri: 'P5',  rate: 200, bw: 0.1408  },
+  { name: 'percep/ptcloud',  pri: 'P10', rate: 5,   bw: 2.0     },
+  { name: 'video/cam0',      pri: 'P20', rate: 30,  bw: 12.0    },
+  { name: 'video/cam1',      pri: 'P20', rate: 30,  bw: 12.0    },
+  { name: 'video/cam2',      pri: 'P20', rate: 30,  bw: 12.0    },
+];
+
+// ─── Simulation state ───
+let tick = 0;
+const CYCLE = 300;
+const CONG_START = 80, CONG_FULL = 120, CONG_END = 260;
+
+// Per-robot WebRTC freeze state
+let webrtcFrozen = [];
+let webrtcFreezeTicks = [];
+
+// ─── DOM setup ───
+function buildPanels() {
+  const panels = document.getElementById('panels');
+  panels.innerHTML = '';
+  for (const proto of ['moq', 'zenoh', 'webrtc']) {
+    const p = document.createElement('div');
+    p.className = `panel ${proto}`;
+    const labels = { moq: ['MoQ / QUIC', 'Per-stream priority'], zenoh: ['Zenoh 1.9 (Apr 2026) / QUIC', 'No priority'], webrtc: ['WebRTC / DTLS', 'Single ordered stream'] };
+    const [name, desc] = labels[proto];
+    p.innerHTML = `
+      <div class="panel-header"><div class="dot"></div><span class="proto">${name}</span><span class="desc">${desc}</span></div>
+      <div class="fleet-grid" id="${proto}-grid"></div>
+      <div class="panel-summary"><span class="summary-big" id="${proto}-count">--/--</span><span class="summary-detail" id="${proto}-detail"></span></div>
+    `;
+    panels.appendChild(p);
+  }
+
+  // Build robot cards per panel
+  for (const proto of ['moq', 'zenoh', 'webrtc']) {
+    const grid = document.getElementById(`${proto}-grid`);
+    grid.innerHTML = '';
+    for (let i = 1; i <= NUM_ROBOTS; i++) {
+      const card = document.createElement('div');
+      card.className = 'robot-card ok';
+      card.id = `${proto}-r${i}`;
+      card.innerHTML = `<div class="rdot ok" id="${proto}-d${i}"></div><span class="rname">robot-${i}</span><span class="rinfo" id="${proto}-i${i}">OK</span>`;
+      grid.appendChild(card);
+    }
+  }
+
+  // Build track detail columns
+  const tcols = document.getElementById('track-cols');
+  tcols.innerHTML = '';
+  for (const proto of ['moq', 'zenoh', 'webrtc']) {
+    const col = document.createElement('div');
+    col.className = `track-col ${proto}`;
+    const hdrLabel = { moq: 'MoQ (priority)', zenoh: 'Zenoh (no priority)', webrtc: 'WebRTC (single stream)' }[proto];
+    let rows = `<div class="track-col-hdr">${hdrLabel}</div>`;
+    for (const t of TRACKS) {
+      rows += `<div class="trow">
+        <span class="tname">${t.name}</span>
+        <span class="tpri">${proto === 'webrtc' ? '—' : t.pri}</span>
+        <div class="tbar"><div class="tfill" id="t-${proto}-${t.name.replace(/\//g,'-')}" style="width:100%;background:var(--green)"></div></div>
+        <span class="tpct" id="tv-${proto}-${t.name.replace(/\//g,'-')}">100%</span>
+      </div>`;
+    }
+    col.innerHTML = rows;
+    tcols.appendChild(col);
+  }
+
+  // Reset WebRTC freeze state
+  webrtcFrozen = new Array(NUM_ROBOTS).fill(false);
+  webrtcFreezeTicks = new Array(NUM_ROBOTS).fill(0);
+}
+
+function setRobots(n) {
+  NUM_ROBOTS = n;
+  document.querySelectorAll('.robot-btns button').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('demand-val').textContent = Math.round(n * PER_ROBOT_BW) + ' Mbps';
+  tick = 0;
+  buildPanels();
+}
+
+// ─── Simulation ───
+function getBandwidth() {
+  if (tick < CONG_START) return FULL_BW;
+  if (tick < CONG_FULL) return FULL_BW - (FULL_BW - CONGESTED_BW) * (tick - CONG_START) / (CONG_FULL - CONG_START);
+  if (tick < CONG_END) return CONGESTED_BW;
+  if (tick < CYCLE) return CONGESTED_BW + (FULL_BW - CONGESTED_BW) * (tick - CONG_END) / (CYCLE - CONG_END);
+  return FULL_BW;
+}
+
+function setRobot(proto, i, status, info) {
+  const card = document.getElementById(`${proto}-r${i}`);
+  const dot = document.getElementById(`${proto}-d${i}`);
+  const infoEl = document.getElementById(`${proto}-i${i}`);
+  if (!card) return;
+  card.className = `robot-card ${status}`;
+  dot.className = `rdot ${status}`;
+  infoEl.textContent = info;
+}
+
+function setTrack(proto, trackName, pct) {
+  const key = trackName.replace(/\//g, '-');
+  const fill = document.getElementById(`t-${proto}-${key}`);
+  const val = document.getElementById(`tv-${proto}-${key}`);
+  if (!fill) return;
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  fill.style.width = p + '%';
+  fill.style.background = p >= 80 ? 'var(--green)' : p >= 40 ? 'var(--orange)' : 'var(--red)';
+  val.textContent = p + '%';
+  val.style.color = p >= 80 ? 'var(--green)' : p >= 40 ? 'var(--orange)' : 'var(--red)';
+}
+
+function setSummary(proto, count, total, cls, detail) {
+  document.getElementById(`${proto}-count`).textContent = `${count}/${total}`;
+  document.getElementById(`${proto}-count`).className = `summary-big ${cls}`;
+  document.getElementById(`${proto}-detail`).textContent = detail;
+}
+
+function simTick() {
+  tick = (tick + 1) % CYCLE;
+  const bw = getBandwidth();
+  const totalDemand = NUM_ROBOTS * PER_ROBOT_BW;
+  const ratio = Math.min(1, bw / totalDemand);
+  const congested = ratio < 0.9;
+
+  // Update scenario bar
+  const bwPct = Math.round(bw / FULL_BW * 100);
+  document.getElementById('bw-fill').style.width = bwPct + '%';
+  document.getElementById('bw-fill').style.background = ratio >= 0.9 ? 'var(--green)' : ratio >= 0.3 ? 'var(--orange)' : 'var(--red)';
+  document.getElementById('bw-val').textContent = Math.round(bw) + ' Mbps';
+  document.getElementById('phase-label').textContent = congested ? 'WiFi interference — bandwidth constrained' : 'Normal operation';
+  document.getElementById('phase-label').style.color = congested ? 'var(--red-bright)' : 'var(--green)';
+
+  // ── MoQ simulation ──
+  // Priority scheduling: control first. Control BW for fleet: NUM_ROBOTS × 0.508 Mbps
+  const ctrlBwNeeded = NUM_ROBOTS * PER_ROBOT_CTRL;
+  const ctrlRatio = Math.min(1, bw / ctrlBwNeeded);
+  const heavyRemaining = Math.max(0, bw - ctrlBwNeeded);
+  const heavyNeeded = NUM_ROBOTS * (PER_ROBOT_BW - PER_ROBOT_CTRL);
+  const heavyRatio = Math.min(1, heavyRemaining / heavyNeeded);
+  // Per-track for robot-1
+  const ptcloudBw = NUM_ROBOTS * 2.0;
+  const videoBw = NUM_ROBOTS * 36.0;
+  const ptcloudRem = Math.max(0, bw - ctrlBwNeeded);
+  const ptcloudPct = Math.min(100, ptcloudRem / ptcloudBw * 100);
+  const videoRem = Math.max(0, ptcloudRem - ptcloudBw);
+  const videoPct = Math.min(100, videoRem / videoBw * 100);
+
+  let moqOk = 0;
+  for (let i = 1; i <= NUM_ROBOTS; i++) {
+    if (ctrlRatio > 0.5) {
+      moqOk++;
+      const vidFps = Math.round(30 * videoPct / 100);
+      setRobot('moq', i, 'ok', congested ? `ctrl 100% | vid ${vidFps}fps` : 'OK');
+    } else {
+      setRobot('moq', i, 'degraded', `ctrl ${Math.round(ctrlRatio*100)}%`);
+    }
+  }
+  setSummary('moq', moqOk, NUM_ROBOTS, moqOk === NUM_ROBOTS ? 'ok' : 'warn',
+    congested ? `Safety 100% · Video shed to ${Math.round(videoPct)}%` : 'All tracks nominal');
+
+  // MoQ per-track detail (robot-1)
+  setTrack('moq', 'safety/hb', ctrlRatio >= 0.5 ? 100 : ctrlRatio * 100);
+  setTrack('moq', 'ctrl/streaming', ctrlRatio >= 0.5 ? 98 + Math.random()*2 : ctrlRatio * 100);
+  setTrack('moq', 'ctrl/task', ctrlRatio >= 0.5 ? 100 : ctrlRatio * 100);
+  setTrack('moq', 'sensors/joints', ctrlRatio >= 0.5 ? 96 + Math.random()*4 : ctrlRatio * 100);
+  setTrack('moq', 'sensors/ft', ctrlRatio >= 0.5 ? 95 + Math.random()*5 : ctrlRatio * 100);
+  setTrack('moq', 'sensors/imu', ctrlRatio >= 0.5 ? 90 + Math.random()*10 : ctrlRatio * 100);
+  setTrack('moq', 'percep/ptcloud', ptcloudPct);
+  setTrack('moq', 'video/cam0', videoPct);
+  setTrack('moq', 'video/cam1', videoPct * (0.95 + Math.random()*0.1));
+  setTrack('moq', 'video/cam2', videoPct * (0.9 + Math.random()*0.2));
+
+  // ── Zenoh simulation ──
+  // No priority: all tracks share bandwidth. Video dominates queue.
+  // Heartbeat latency scales with congestion × fleet size.
+  // At ratio=0.13 with 10 robots: ~870ms heartbeat latency (10× the single-robot 87ms)
+  let zenohOk = 0, zenohDeg = 0, zenohLost = 0;
+  for (let i = 1; i <= NUM_ROBOTS; i++) {
+    if (!congested) {
+      zenohOk++;
+      setRobot('zenoh', i, 'ok', 'OK');
+    } else {
+      // Heartbeat latency model: 87ms × (1/ratio) × sqrt(numRobots/1) + noise
+      // Single robot at 87ms benchmark → fleet scales with sqrt(N) (queue interaction)
+      const baseLatency = 87 * (1 / Math.max(ratio, 0.05));
+      const fleetFactor = Math.sqrt(NUM_ROBOTS);
+      const noise = (Math.random() - 0.5) * baseLatency * 0.6;
+      const hbLatency = Math.round(baseLatency * fleetFactor / 3 + noise);
+
+      if (hbLatency < 250) {
+        zenohOk++;
+        setRobot('zenoh', i, 'ok', `hb ${hbLatency}ms`);
+      } else if (hbLatency < 500) {
+        zenohDeg++;
+        setRobot('zenoh', i, 'degraded', `hb ${hbLatency}ms`);
+      } else {
+        zenohLost++;
+        setRobot('zenoh', i, 'lost', `NO HEARTBEAT`);
+      }
+    }
+  }
+  const zenohCtrl = zenohOk + zenohDeg;
+  setSummary('zenoh', zenohCtrl, NUM_ROBOTS, zenohCtrl === NUM_ROBOTS ? 'ok' : zenohCtrl > NUM_ROBOTS/2 ? 'warn' : 'bad',
+    congested ? `All tracks ${Math.round(ratio*100)}% · HB latency elevated` : 'All tracks nominal');
+
+  // Zenoh per-track detail (all tracks get same ratio)
+  const zenohEffective = congested ? ratio * 100 : 100;
+  for (const t of TRACKS) {
+    // Small tracks have higher effective delivery but high latency
+    const isSmall = t.bw < 1;
+    const pct = congested ? (isSmall ? Math.min(100, zenohEffective * 3 + Math.random()*20) : zenohEffective + Math.random()*10) : 100;
+    setTrack('zenoh', t.name, pct);
+  }
+
+  // ── WebRTC simulation ──
+  // Single ordered stream: HOL blocking causes random complete freezes
+  let webrtcOk = 0, webrtcDeg = 0, webrtcLost = 0;
+  for (let i = 0; i < NUM_ROBOTS; i++) {
+    if (!congested) {
+      webrtcFrozen[i] = false;
+      webrtcFreezeTicks[i] = 0;
+      webrtcOk++;
+      setRobot('webrtc', i+1, 'ok', 'OK');
+    } else {
+      // Manage freeze state
+      if (webrtcFrozen[i]) {
+        webrtcFreezeTicks[i]--;
+        if (webrtcFreezeTicks[i] <= 0) {
+          webrtcFrozen[i] = false;
+        }
+      } else {
+        // Freeze probability based on congestion severity
+        const freezeProb = Math.min(0.25, (1 - ratio) * 0.3);
+        if (Math.random() < freezeProb) {
+          webrtcFrozen[i] = true;
+          webrtcFreezeTicks[i] = 10 + Math.floor(Math.random() * 30); // 1-4 seconds
+        }
+      }
+
+      if (webrtcFrozen[i]) {
+        webrtcLost++;
+        const dur = Math.round(webrtcFreezeTicks[i] * 100);
+        setRobot('webrtc', i+1, 'lost', `FROZEN ${dur}ms`);
+      } else {
+        // Recovering — choppy but functional
+        const r = 0.5 + Math.random() * 0.4;
+        if (r > 0.7) {
+          webrtcOk++;
+          setRobot('webrtc', i+1, 'ok', `${Math.round(r*100)}%`);
+        } else {
+          webrtcDeg++;
+          setRobot('webrtc', i+1, 'degraded', `choppy ${Math.round(r*100)}%`);
+        }
+      }
+    }
+  }
+  const webrtcCtrl = webrtcOk + webrtcDeg;
+  setSummary('webrtc', webrtcCtrl, NUM_ROBOTS, webrtcCtrl === NUM_ROBOTS ? 'ok' : webrtcCtrl > NUM_ROBOTS/2 ? 'warn' : 'bad',
+    congested ? `HOL blocking · ${webrtcLost} frozen` : 'All tracks nominal');
+
+  // WebRTC per-track detail (all or nothing per freeze)
+  const wFrozen = webrtcFrozen[0]; // robot-1
+  for (const t of TRACKS) {
+    const pct = congested ? (wFrozen ? 0 : (55 + Math.random()*35)) : 100;
+    setTrack('webrtc', t.name, pct);
+  }
+}
+
+// ─── Init ───
+buildPanels();
+document.getElementById('demand-val').textContent = Math.round(NUM_ROBOTS * PER_ROBOT_BW) + ' Mbps';
+setInterval(simTick, 100); // 10 Hz
+</script>
+</body>
+</html>

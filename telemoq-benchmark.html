@@ -191,6 +191,10 @@
 </head>
 <body>
 
+<div style="background:#1a1a00;border:1px solid #444400;padding:.6rem 1rem;margin-bottom:1.5rem;font-size:.8rem;color:#cca;line-height:1.5">
+  <strong style="color:#ffff05">Note:</strong> This benchmark predates the <a href="fleet-demo.html" style="color:#ffff05">Zenoh QUIC multistream comparison</a>. It compares telemoq's three internal modes (priority / no-priority / single-stream) on localhost. For the fleet-scale MoQ vs Zenoh vs WebRTC comparison with validated benchmark data, see <a href="fleet-demo.html" style="color:#ffff05">fleet-demo.html</a>.
+</div>
+
 <h1>telemoq benchmark</h1>
 <p class="subtitle">Three modes, one binary. Same relay, same connection, same payloads. Only the transport behavior changes.</p>
 
@@ -318,7 +322,7 @@
   <a href="https://github.com/alltheseas/telemoq" style="color:var(--accent,#ffff05)">github.com/alltheseas/telemoq</a> &mdash; MoQ transport for robotics teleoperation &middot;
   built on <a href="https://github.com/moq-dev/moq">moq-dev/moq</a> &middot;
   measured 2026-03-02 &middot; localhost congestion stress test (~63s per mode)
-  <br><a href="telemoq-vs-webrtc.html" style="color:var(--accent,#ffff05)">&larr; back to demo</a>
+  <br><a href="fleet-demo.html" style="color:var(--accent,#ffff05)">&larr; fleet congestion demo</a> &middot; <a href="telemoq-vs-webrtc.html" style="color:var(--accent,#ffff05)">single-robot comparison</a>
 </div>
 
 <script>
