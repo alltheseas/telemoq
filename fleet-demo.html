@@ -241,6 +241,9 @@ body{font-family:var(--font-sans);color:var(--text);background:var(--bg);line-he
   <div style="margin-top:.8rem;font-size:.78rem;color:var(--text-muted);max-width:700px;line-height:1.5">
     <strong style="color:var(--text-dim)">Simulation note:</strong> This page simulates protocol behavior based on measured benchmarks. Zenoh behavior modeled from zenoh-teleop-bench QUIC multistream results (zenoh 1.9.0, same Quinn QUIC stack). WebRTC modeled from single-stream TCP/DTLS HOL blocking characteristics. Fleet-scale extrapolation assumes linear bandwidth demand scaling.
   </div>
+  <div style="margin-top:.8rem;font-size:.78rem;color:var(--text-muted);max-width:700px;line-height:1.5">
+    <strong style="color:var(--text-dim)">Why Zenoh lacks priority:</strong> Zenoh 1.9.0 <a href="https://github.com/eclipse-zenoh/zenoh/pull/2189" style="color:var(--accent)">PR #2189</a> added one QUIC stream per priority level, eliminating head-of-line blocking. However, the code never calls Quinn's <code style="font-size:.72rem;padding:.1rem .3rem;background:rgba(255,255,255,.06)">SendStream::set_priority()</code> &mdash; the priority parameter is received but discarded (<code style="font-size:.72rem;padding:.1rem .3rem;background:rgba(255,255,255,.06)">|_prio|</code>) in <a href="https://github.com/eclipse-zenoh/zenoh/blob/main/io/zenoh-link-commons/src/quic/unicast.rs" style="color:var(--accent)">unicast.rs</a>. Without this call, Quinn's scheduler treats all streams equally regardless of priority assignment. See <a href="https://github.com/eclipse-zenoh/zenoh/issues/2016" style="color:var(--accent)">issue #2016</a>.
+  </div>
 </footer>
 
 </div>
