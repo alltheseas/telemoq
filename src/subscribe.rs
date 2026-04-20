@@ -303,16 +303,16 @@ async fn display_loop(
             "  telemoq | {} | relay: {} | uptime: {}s | mode: {}",
             broadcast_name, url, elapsed, mode_display
         );
-        println!("  ╔══════════════════════╤═════╤═════════╤══════════╤════════════╤═════════╤═══════╤═══════════════════════╗");
-        println!("  ║ Track                │ Pri │ Recv/s  │ Expected │   Status   │ Latency │  Gap  │ Throughput            ║");
-        println!("  ╟──────────────────────┼─────┼─────────┼──────────┼────────────┼─────────┼───────┼───────────────────────╢");
+        println!("  ╔══════════════════════╤═════╤═════════╤══════════╤════════════╤═════════╤═══════════════════════╗");
+        println!("  ║ Track                │ Pri │ Recv/s  │ Expected │   Status   │ Latency │ Throughput            ║");
+        println!("  ╟──────────────────────┼─────┼─────────┼──────────┼────────────┼─────────┼───────────────────────╢");
 
         for (i, def) in TRACKS.iter().enumerate() {
             let count = stats[i].recv_count.swap(0, Ordering::Relaxed);
             let bytes = stats[i].recv_bytes.swap(0, Ordering::Relaxed);
             let lat_sum = stats[i].latency_sum_ms.swap(0, Ordering::Relaxed);
             let lat_count = stats[i].latency_count.swap(0, Ordering::Relaxed);
-            let gap = stats[i].max_gap_ms.swap(0, Ordering::Relaxed);
+            stats[i].max_gap_ms.swap(0, Ordering::Relaxed); // drain but don't display
             let expected = def.rate_hz as u64;
             let pct = if expected > 0 {
                 (count * 100).checked_div(expected).unwrap_or(0)
@@ -324,23 +324,14 @@ async fn display_loop(
 
             let avg_lat = if lat_count > 0 { lat_sum / lat_count } else { 0 };
             let lat_str = format!("{:>4}ms", avg_lat);
-            // Color latency: green <10ms, yellow 10-50ms, red >50ms
-            let lat_colored = if avg_lat < 10 {
+            // Color latency: green <100ms, yellow 100-250ms, red >250ms
+            // Thresholds from teleop research: <100ms imperceptible, 100-250ms acceptable, >250ms degraded
+            let lat_colored = if avg_lat < 100 {
                 format!("\x1B[32m{lat_str}\x1B[0m")
-            } else if avg_lat < 50 {
+            } else if avg_lat < 250 {
                 format!("\x1B[33m{lat_str}\x1B[0m")
             } else {
                 format!("\x1B[31m{lat_str}\x1B[0m")
-            };
-
-            // Color gap: green if within 3× expected interval, red if exceeding
-            let expected_interval_ms = if def.rate_hz > 0 { 1000 / def.rate_hz as u64 } else { 100 };
-            let gap_threshold = expected_interval_ms * 3;
-            let gap_str = format!("{:>3}ms", gap);
-            let gap_colored = if gap <= gap_threshold {
-                format!("\x1B[32m{gap_str}\x1B[0m")
-            } else {
-                format!("\x1B[31m{gap_str}\x1B[0m")
             };
 
             // Bar chart (20 chars wide)
@@ -351,8 +342,8 @@ async fn display_loop(
 
             let effective_pri = if no_priority { 0 } else { def.priority };
             println!(
-                "  ║ {:<20} │ P{:<2} │ {:>5}/s │ {:>6}/s │   {}   │ {} │ {} │ {} {:>9} ║",
-                def.label, effective_pri, count, expected, status, lat_colored, gap_colored, bar, throughput
+                "  ║ {:<20} │ P{:<2} │ {:>5}/s │ {:>6}/s │   {}   │ {} │ {} {:>9} ║",
+                def.label, effective_pri, count, expected, status, lat_colored, bar, throughput
             );
 
             // Show latest data for interesting tracks
@@ -361,7 +352,7 @@ async fn display_loop(
                     if let Ok(hb) = bincode::deserialize::<crate::schema::Heartbeat>(payload) {
                         let estop = if hb.estop_engaged { "\x1B[31mENGAGED\x1B[0m" } else { "ok" };
                         println!(
-                            "  ║   └─ seq: {} estop: {} {:>65} ║",
+                            "  ║   └─ seq: {} estop: {} {:>57} ║",
                             hb.sequence, estop, ""
                         );
                     }
@@ -376,7 +367,7 @@ async fn display_loop(
                             _ => "?",
                         };
                         println!(
-                            "  ║   └─ task #{}: {} ({}%) {:>58} ║",
+                            "  ║   └─ task #{}: {} ({}%) {:>50} ║",
                             ts.task_id, state_str, ts.progress_pct, ""
                         );
                     }
@@ -386,7 +377,7 @@ async fn display_loop(
                         let angles: Vec<String> =
                             js.positions.iter().map(|p| format!("{:.2}", p)).collect();
                         println!(
-                            "  ║   └─ joints: [{}] rad {:>30} ║",
+                            "  ║   └─ joints: [{}] rad {:>22} ║",
                             angles.join(", "),
                             ""
                         );
@@ -396,7 +387,7 @@ async fn display_loop(
                     if let Ok(ft) = bincode::deserialize::<crate::schema::ForceTorque>(payload) {
                         let contact = if ft.force[2].abs() > 3.0 { "YES" } else { "no" };
                         println!(
-                            "  ║   └─ F=[{:.1}, {:.1}, {:.1}]N  weld contact: {} {:>39} ║",
+                            "  ║   └─ F=[{:.1}, {:.1}, {:.1}]N  weld contact: {} {:>31} ║",
                             ft.force[0], ft.force[1], ft.force[2], contact, ""
                         );
                     }
@@ -404,13 +395,13 @@ async fn display_loop(
             }
         }
 
-        println!("  ╟──────────────────────┴─────┴─────────┴──────────┴────────────┴─────────┴───────┴───────────────────────╢");
-        println!("  ║  Latency = wall-clock delta (pub→relay→sub).  Gap = max inter-arrival time (green < 3× expected interval). ║");
-        println!("  ║                                                                                                        ║");
-        println!("  ║  IHMC DRC lesson: 9,600 bps was enough for control. Video is expendable.                               ║");
-        println!("  ║  TCP/WebRTC: One lost video packet  →  ALL streams freeze (HOL blocking)                               ║");
-        println!("  ║  MoQ/QUIC:   Video degrades         →  Robot stays under control (priority streams)                    ║");
-        println!("  ╚════════════════════════════════════════════════════════════════════════════════════════════════════════╝");
+        println!("  ╟──────────────────────┴─────┴─────────┴──────────┴────────────┴─────────┴───────────────────────╢");
+        println!("  ║  Latency = wall-clock delta (pub → relay → sub)                                      ║");
+        println!("  ║                                                                                       ║");
+        println!("  ║  IHMC DRC lesson: 9,600 bps was enough for control. Video is expendable.              ║");
+        println!("  ║  TCP/WebRTC: One lost video packet  →  ALL streams freeze (HOL blocking)              ║");
+        println!("  ║  MoQ/QUIC:   Video degrades         →  Robot stays under control (priority streams)   ║");
+        println!("  ╚═══════════════════════════════════════════════════════════════════════════════════════╝");
     }
 }
 
